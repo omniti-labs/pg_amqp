@@ -310,3 +310,15 @@ amqp_tx_rollback_ok_t *amqp_tx_rollback(amqp_connection_state_t state,
 		    amqp_tx_rollback_t);
   return RPC_REPLY(amqp_tx_rollback_ok_t);
 }
+
+amqp_basic_return_t *amqp_basic_return(amqp_connection_state_t state,
+                                       amqp_channel_t channel,
+                                       amqp_table_t arguments)
+{
+  amqp_rpc_reply_t *amqp_rpc_reply;
+  amqp_rpc_reply = amqp_get_rpc_reply();
+  *amqp_rpc_reply =
+    AMQP_SIMPLE_RPC(state, channel, BASIC, RETURN, RETURN,
+		    amqp_basic_return_t);
+  return RPC_REPLY(amqp_basic_return_t);
+}

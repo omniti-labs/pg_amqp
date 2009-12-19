@@ -309,6 +309,10 @@ extern struct amqp_tx_rollback_ok_t_ *amqp_tx_rollback(amqp_connection_state_t s
             amqp_channel_t channel,
             amqp_table_t arguments);
 
+extern struct amqp_basic_return_t_ *amqp_basic_return(amqp_connection_state_t state,
+            amqp_channel_t channel,
+            amqp_table_t arguments);
+
 /*
  * Can be used to see if there is data still in the buffer, if so
  * calling amqp_simple_wait_frame will not immediately enter a
