@@ -1,0 +1,4 @@
+# add this line to your postgresql config
+shared_preload_libraries = 'pg_amqp.so'
+
+# create the pg_amqp schema using pg_amqp.sql
