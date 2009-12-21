@@ -170,10 +170,9 @@ local_amqp_get_bs(broker_id) {
       if(!user) user = "guest";
       pass = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 5);
       if(!pass) pass = "guest";
-      SPI_finish();
 
       bs->conn = amqp_new_connection();
-      if(!bs->conn) return NULL;
+      if(!bs->conn) { SPI_finish(); return NULL; }
       bs->sockfd = amqp_open_socket(host, port);
       if(bs->sockfd < 0) goto busted;
       amqp_set_sockfd(bs->conn, bs->sockfd);
@@ -204,14 +203,14 @@ local_amqp_get_bs(broker_id) {
       }
     } else {
       elog(WARNING, "amqp can't find broker %d", broker_id);
-      SPI_finish();
     }
   } else {
     elog(WARNING, "amqp broker lookup query failed");
-    SPI_finish();
   }
+  SPI_finish();
   return bs;
  busted:
+  SPI_finish();
   local_amqp_disconnect_bs(bs);
   return bs;
 }
