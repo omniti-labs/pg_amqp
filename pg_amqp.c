@@ -256,7 +256,9 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
   struct brokerstate *bs;
   if(!PG_ARGISNULL(0)) {
     int broker_id;
+    int once_more = 1;
     broker_id = PG_GETARG_INT32(0);
+  redo:
     bs = local_amqp_get_bs(broker_id);
     if(bs && bs->conn && (channel == 1 || !bs->inerror)) {
       int rv;
@@ -274,6 +276,11 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
                               mandatory, immediate, NULL, body_b);
       reply = amqp_get_rpc_reply();
       if(rv || reply->reply_type != AMQP_RESPONSE_NORMAL) {
+        if(once_more && (channel == 1 || bs->uncommitted == 0)) {
+          once_more = 0;
+          local_amqp_disconnect_bs(bs);
+          goto redo;
+        }
         bs->inerror = 1;
         PG_RETURN_BOOL(0 != 0);
       }
