@@ -84,6 +84,7 @@ local_amqp_disconnect_bs(struct brokerstate *bs) {
   if(bs && bs->conn) {
     int errorstate = bs->inerror;
     amqp_connection_close(bs->conn, AMQP_REPLY_SUCCESS);
+    if(bs->sockfd >= 0) close(bs->sockfd);
     amqp_destroy_connection(bs->conn);
     memset(bs, 0, sizeof(*bs));
     bs->inerror = errorstate;
