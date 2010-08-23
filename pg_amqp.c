@@ -221,6 +221,7 @@ local_amqp_disconnect(broker_id) {
   local_amqp_disconnect_bs(bs);
 }
 
+PG_FUNCTION_INFO_V1(pg_amqp_exchange_declare);
 Datum
 pg_amqp_exchange_declare(PG_FUNCTION_ARGS) {
   struct brokerstate *bs;
