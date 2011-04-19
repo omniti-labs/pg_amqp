@@ -43,12 +43,13 @@ select amqp.disconnect(broker_id) from amqp.broker
 will disconnect any brokers that may be connected.';
 
 create table amqp.broker (
-  broker_id serial not null primary key,
-  host text,
-  port integer,
+  broker_id serial not null,
+  host text not null,
+  port integer not null default 5672,
   vhost text,
   username text,
-  password text
+  password text,
+  primary key(broker_id, host, port)
 );
 
 COMMIT;

@@ -33,8 +33,10 @@
  *
  */
 
+#include <unistd.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/socket.h>
 
 #include "postgres.h"
 #include "funcapi.h"
@@ -74,6 +76,7 @@ struct brokerstate {
   int sockfd;
   int uncommitted;
   int inerror;
+  int idx;
   struct brokerstate *next;
 };
 
@@ -148,58 +151,71 @@ local_amqp_get_a_bs(broker_id) {
 static struct brokerstate *
 local_amqp_get_bs(broker_id) {
   char sql[1024];
+  char host_copy[300] = "";
+  int tries = 0;
   struct brokerstate *bs = local_amqp_get_a_bs(broker_id);
   if(bs->conn) return bs;
   if(SPI_connect() == SPI_ERROR_CONNECT) return NULL;
   snprintf(sql, sizeof(sql), "SELECT host, port, vhost, username, password "
                              "  FROM amqp.broker "
-                             " WHERE broker_id = %d", broker_id);
-  if(SPI_OK_SELECT == SPI_execute(sql, true, 1)) {
-    if(1 == SPI_processed) {
+                             " WHERE broker_id = %d "
+                             " ORDER BY host DESC, port", broker_id);
+  if(SPI_OK_SELECT == SPI_execute(sql, true, 100)) {
+    tries = SPI_processed;
+   retry:
+    tries--;
+    if(SPI_processed > 0) {
+      struct timeval hb = { .tv_sec = 2UL, .tv_usec = 0UL };
       amqp_rpc_reply_t *reply, s_reply;
       char *host, *vhost, *user, *pass;
       Datum port_datum;
       bool is_null;
       int port = 5672;
-      host = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
+      bs->idx = (bs->idx + 1) % SPI_processed;
+      host = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 1);
       if(!host) host = "localhost";
-      port_datum = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 2, &is_null);
+      port_datum = SPI_getbinval(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 2, &is_null);
       if(!is_null) port = DatumGetInt32(port_datum);
-      vhost = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 3);
+      vhost = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 3);
       if(!vhost) vhost = "/";
-      user = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 4);
+      user = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 4);
       if(!user) user = "guest";
-      pass = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 5);
+      pass = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 5);
       if(!pass) pass = "guest";
+      snprintf(host_copy, sizeof(host_copy), "%s:%d", host, port);
 
       bs->conn = amqp_new_connection();
       if(!bs->conn) { SPI_finish(); return NULL; }
-      bs->sockfd = amqp_open_socket(host, port);
-      if(bs->sockfd < 0) goto busted;
+      bs->sockfd = amqp_open_socket(host, port, &hb);
+      if(bs->sockfd < 0) {
+        elog(WARNING, "amqp[%s] login socket/connect failed: %s",
+             host_copy, strerror(-bs->sockfd));
+        goto busted;
+      }
       amqp_set_sockfd(bs->conn, bs->sockfd);
       s_reply = amqp_login(bs->conn, vhost, 0, 131072,
                            0, AMQP_SASL_METHOD_PLAIN,
                            user, pass);
       if(s_reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        elog(WARNING, "amqp login failed on broker %d", broker_id);
+        elog(WARNING, "amqp[%s] login failed on broker %d", host_copy, broker_id);
         goto busted;
       }
       amqp_channel_open(bs->conn, 1);
       reply = amqp_get_rpc_reply();
       if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-        elog(WARNING, "amqp channel open failed on broker %d", broker_id);
+        elog(WARNING, "amqp[%s] channel open failed on broker %d", host_copy, broker_id);
         goto busted;
       }
       amqp_channel_open(bs->conn, 2);
       reply = amqp_get_rpc_reply();
       if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-        elog(WARNING, "amqp channel open failed on broker %d", broker_id);
+        elog(WARNING, "amqp[%s] channel open failed on broker %d", host_copy, broker_id);
         goto busted;
       }
       amqp_tx_select(bs->conn, 2, AMQP_EMPTY_TABLE);
       reply = amqp_get_rpc_reply();
       if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-        elog(WARNING, "amqp could not start tx mode on broker %d", broker_id);
+        elog(WARNING, "amqp[%s] could not start tx mode on broker %d", host_copy, broker_id);
         goto busted;
       }
     } else {
@@ -211,6 +227,10 @@ local_amqp_get_bs(broker_id) {
   SPI_finish();
   return bs;
  busted:
+  if(tries > 0) {
+    elog(WARNING, "amqp[%s] failed on trying next host", host_copy);
+    goto retry;
+  }
   SPI_finish();
   local_amqp_disconnect_bs(bs);
   return bs;

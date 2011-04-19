@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <fcntl.h>
+#include <poll.h>
 
 #include "amqp.h"
 #include "amqp_framing.h"
@@ -19,9 +21,11 @@
 #include <assert.h>
 
 int amqp_open_socket(char const *hostname,
-		     int portnumber)
+		     int portnumber, struct timeval *timeout)
 {
+  int result = -1;
   int sockfd;
+  int flags;
   struct sockaddr_in addr;
   struct hostent *he;
 
@@ -35,12 +39,47 @@ int amqp_open_socket(char const *hostname,
   addr.sin_addr.s_addr = * (uint32_t *) he->h_addr_list[0];
 
   sockfd = socket(PF_INET, SOCK_STREAM, 0);
+  if(((flags = fcntl(sockfd, F_GETFL, 0)) == -1) ||
+     (fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) == -1)) {
+    result = -errno;
+    close(sockfd);
+    return -1;
+  }
+
   if (connect(sockfd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-    int result = -errno;
+    result = -errno;
+    if(errno == EINPROGRESS) {
+      int aerrno, prv;
+      socklen_t aerrno_len = sizeof(aerrno);
+      struct pollfd pfd;
+
+      pfd.fd = sockfd;
+      pfd.events = POLLOUT;
+      prv = poll(&pfd, 1, timeout?(timeout->tv_sec*1000 + timeout->tv_usec/1000):-1);
+      if(prv == 1) {
+        if(getsockopt(sockfd,SOL_SOCKET,SO_ERROR, &aerrno, &aerrno_len) == 0) {
+          if(aerrno == 0) goto good;
+        }
+        else
+          goto good;
+        result = -aerrno;
+      }
+      else result = -ETIMEDOUT;
+    }
     close(sockfd);
     return result;
   }
-
+good:
+  if(((flags = fcntl(sockfd, F_GETFL, 0)) == -1) ||
+     (fcntl(sockfd, F_SETFL, flags & ~O_NONBLOCK) == -1)) {
+    result = -errno;
+    close(sockfd);
+    return result;
+  }
+  if(timeout) {
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, timeout, sizeof(*timeout));
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, timeout, sizeof(*timeout));
+  }
   return sockfd;
 }
 

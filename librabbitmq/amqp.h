@@ -173,7 +173,8 @@ extern int amqp_send_frame_to(amqp_connection_state_t state,
 
 extern int amqp_table_entry_cmp(void const *entry1, void const *entry2);
 
-extern int amqp_open_socket(char const *hostname, int portnumber);
+extern int amqp_open_socket(char const *hostname, int portnumber,
+                            struct timeval *timeout);
 
 extern int amqp_send_header(amqp_connection_state_t state);
 extern int amqp_send_header_to(amqp_connection_state_t state,
