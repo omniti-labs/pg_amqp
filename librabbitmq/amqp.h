@@ -111,7 +111,11 @@ typedef enum amqp_sasl_method_enum_ {
 #define AMQP_PSEUDOFRAME_PROTOCOL_HEADER ((uint8_t) 'A')
 #define AMQP_PSEUDOFRAME_PROTOCOL_CHANNEL ((amqp_channel_t) ((((int) 'M') << 8) | ((int) 'Q')))
 
+typedef struct amqp_basic_return_t_ amqp_basic_return_t;
 typedef int (*amqp_output_fn_t)(void *context, void *buffer, size_t count);
+typedef void (*amqp_basic_return_fn_t)(amqp_channel_t, amqp_basic_return_t *,
+                                       void *);
+
 
 /* Opaque struct. */
 typedef struct amqp_connection_state_t_ *amqp_connection_state_t;
@@ -140,6 +144,9 @@ extern amqp_connection_state_t amqp_new_connection(void);
 extern int amqp_get_sockfd(amqp_connection_state_t state);
 extern void amqp_set_sockfd(amqp_connection_state_t state,
 			    int sockfd);
+extern void amqp_set_basic_return_cb(amqp_connection_state_t state,
+                                     amqp_basic_return_fn_t fn,
+                                     void *data);
 extern int amqp_tune_connection(amqp_connection_state_t state,
 				int channel_max,
 				int frame_max,
@@ -251,6 +258,12 @@ extern struct amqp_exchange_declare_ok_t_ *amqp_exchange_declare(amqp_connection
 								 amqp_boolean_t auto_delete,
 								 amqp_table_t arguments);
 
+extern struct amqp_exchange_delete_ok_t_ *amqp_exchange_delete(amqp_connection_state_t state,
+							       amqp_channel_t channel,
+							       amqp_bytes_t exchange,
+							       amqp_boolean_t if_unused,
+							       amqp_boolean_t nowait);
+
 extern struct amqp_queue_declare_ok_t_ *amqp_queue_declare(amqp_connection_state_t state,
 							   amqp_channel_t channel,
 							   amqp_bytes_t queue,
@@ -309,9 +322,11 @@ extern struct amqp_tx_rollback_ok_t_ *amqp_tx_rollback(amqp_connection_state_t s
             amqp_channel_t channel,
             amqp_table_t arguments);
 
-extern struct amqp_basic_return_t_ *amqp_basic_return(amqp_connection_state_t state,
-            amqp_channel_t channel,
-            amqp_table_t arguments);
+extern struct amqp_basic_qos_ok_t_ *amqp_basic_qos(amqp_connection_state_t state,
+	    amqp_channel_t channel,
+	    uint32_t prefetch_size,
+	    uint16_t prefetch_count,
+	    amqp_boolean_t global);
 
 /*
  * Can be used to see if there is data still in the buffer, if so

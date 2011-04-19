@@ -71,6 +71,9 @@ struct amqp_connection_state_t_ {
 
   amqp_link_t *first_queued_frame;
   amqp_link_t *last_queued_frame;
+
+  amqp_basic_return_fn_t basic_return_callback;
+  void *basic_return_callback_data;
 };
 
 #define CHECK_LIMIT(b, o, l, v) ({ if ((o + l) > (b).len) { return -EFAULT; } (v); })

@@ -338,12 +338,13 @@ typedef struct amqp_basic_publish_t_ {
 } amqp_basic_publish_t;
 
 #define AMQP_BASIC_RETURN_METHOD ((amqp_method_number_t) 0x003C0032) /* 60, 50; 3932210 */
-typedef struct amqp_basic_return_t_ {
+/* typedef in amqp.h for callback */
+struct amqp_basic_return_t_ {
   uint16_t reply_code;
   amqp_bytes_t reply_text;
   amqp_bytes_t exchange;
   amqp_bytes_t routing_key;
-} amqp_basic_return_t;
+};
 
 #define AMQP_BASIC_DELIVER_METHOD ((amqp_method_number_t) 0x003C003C) /* 60, 60; 3932220 */
 typedef struct amqp_basic_deliver_t_ {

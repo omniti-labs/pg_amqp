@@ -126,6 +126,11 @@ static void return_to_idle(amqp_connection_state_t state) {
   state->state = CONNECTION_STATE_IDLE;
 }
 
+void amqp_set_basic_return_cb(amqp_connection_state_t state,
+                              amqp_basic_return_fn_t f, void *data) {
+  state->basic_return_callback = f;
+  state->basic_return_callback_data = data;
+}
 int amqp_handle_input(amqp_connection_state_t state,
 		      amqp_bytes_t received_data,
 		      amqp_frame_t *decoded_frame)
@@ -248,6 +253,15 @@ int amqp_handle_input(amqp_connection_state_t state,
       }
 
       return_to_idle(state);
+
+      if(decoded_frame->frame_type == AMQP_FRAME_METHOD &&
+         decoded_frame->payload.method.id == AMQP_BASIC_RETURN_METHOD) {
+        amqp_basic_return_t *m = decoded_frame->payload.method.decoded;
+        if(state->basic_return_callback)
+          state->basic_return_callback(decoded_frame->channel, m,
+                                       state->basic_return_callback_data);
+      }
+
       return total_bytes_consumed;
     }
 
@@ -376,8 +390,8 @@ int amqp_send_frame(amqp_connection_state_t state,
       AMQP_CHECK_RESULT(write(state->sockfd, state->outbound_buffer.bytes, HEADER_SIZE));
       AMQP_CHECK_RESULT(write(state->sockfd, encoded.bytes, payload_len));
       {
+	unsigned char frame_end_byte = AMQP_FRAME_END;
 	assert(FOOTER_SIZE == 1);
-	char frame_end_byte = AMQP_FRAME_END;
 	AMQP_CHECK_RESULT(write(state->sockfd, &frame_end_byte, FOOTER_SIZE));
       }
       return 0;
@@ -408,8 +422,8 @@ int amqp_send_frame_to(amqp_connection_state_t state,
       AMQP_CHECK_RESULT(fn(context, state->outbound_buffer.bytes, HEADER_SIZE));
       AMQP_CHECK_RESULT(fn(context, encoded.bytes, payload_len));
       {
+	unsigned char frame_end_byte = AMQP_FRAME_END;
 	assert(FOOTER_SIZE == 1);
-	char frame_end_byte = AMQP_FRAME_END;
 	AMQP_CHECK_RESULT(fn(context, &frame_end_byte, FOOTER_SIZE));
       }
       return 0;

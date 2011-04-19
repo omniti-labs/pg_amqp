@@ -298,10 +298,17 @@ static int amqp_login_inner(amqp_connection_state_t state,
 			    amqp_sasl_method_enum sasl_method,
 			    va_list vl)
 {
+  struct timeval hb;
   amqp_method_t method;
   uint32_t server_frame_max;
   uint16_t server_channel_max;
   uint16_t server_heartbeat;
+
+  if(heartbeat != 0) {
+    hb.tv_sec = 2*heartbeat; hb.tv_usec = 0;
+    setsockopt(state->sockfd, SOL_SOCKET, SO_RCVTIMEO, &hb, sizeof(hb));
+    setsockopt(state->sockfd, SOL_SOCKET, SO_SNDTIMEO, &hb, sizeof(hb));
+  }
 
   amqp_send_header(state);
 
@@ -350,6 +357,11 @@ static int amqp_login_inner(amqp_connection_state_t state,
 
   if (server_heartbeat != 0 && server_heartbeat < heartbeat) {
     heartbeat = server_heartbeat;
+  }
+  if(heartbeat != 0) {
+    hb.tv_sec = 2*heartbeat; hb.tv_usec = 0;
+    setsockopt(state->sockfd, SOL_SOCKET, SO_RCVTIMEO, &hb, sizeof(hb));
+    setsockopt(state->sockfd, SOL_SOCKET, SO_SNDTIMEO, &hb, sizeof(hb));
   }
 
   AMQP_CHECK_RESULT(amqp_tune_connection(state, channel_max, frame_max, heartbeat));

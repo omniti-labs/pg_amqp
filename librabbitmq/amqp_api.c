@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
+
 #ifndef DISABLE_THREADS
 #include <pthread.h>
 #endif
@@ -128,6 +129,21 @@ amqp_exchange_declare_ok_t *amqp_exchange_declare(amqp_connection_state_t state,
 		    amqp_exchange_declare_t,
 		    0, exchange, type, passive, durable, auto_delete, 0, 0, arguments);
   return RPC_REPLY(amqp_exchange_declare_ok_t);
+}
+
+amqp_exchange_delete_ok_t *amqp_exchange_delete(amqp_connection_state_t state,
+                                                amqp_channel_t channel,
+                                                amqp_bytes_t exchange,
+                                                amqp_boolean_t if_unused,
+                                                amqp_boolean_t nowait)
+{
+  amqp_rpc_reply_t *amqp_rpc_reply;
+  amqp_rpc_reply = amqp_get_rpc_reply();
+  *amqp_rpc_reply =
+    AMQP_SIMPLE_RPC(state, channel, EXCHANGE, DELETE, DELETE_OK,
+                    amqp_exchange_delete_t,
+                    0, exchange, if_unused, nowait);
+  return RPC_REPLY(amqp_exchange_delete_ok_t);
 }
 
 amqp_queue_declare_ok_t *amqp_queue_declare(amqp_connection_state_t state,
@@ -295,7 +311,7 @@ amqp_tx_commit_ok_t *amqp_tx_commit(amqp_connection_state_t state,
   amqp_rpc_reply = amqp_get_rpc_reply();
   *amqp_rpc_reply =
     AMQP_SIMPLE_RPC(state, channel, TX, COMMIT, COMMIT_OK,
-		    amqp_tx_commit_t, 0);
+		    amqp_tx_commit_t, channel);
   return RPC_REPLY(amqp_tx_commit_ok_t);
 }
 
@@ -307,18 +323,21 @@ amqp_tx_rollback_ok_t *amqp_tx_rollback(amqp_connection_state_t state,
   amqp_rpc_reply = amqp_get_rpc_reply();
   *amqp_rpc_reply =
     AMQP_SIMPLE_RPC(state, channel, TX, ROLLBACK, ROLLBACK_OK,
-		    amqp_tx_rollback_t, 0);
+		    amqp_tx_rollback_t, channel);
   return RPC_REPLY(amqp_tx_rollback_ok_t);
 }
 
-amqp_basic_return_t *amqp_basic_return(amqp_connection_state_t state,
-                                       amqp_channel_t channel,
-                                       amqp_table_t arguments)
+amqp_basic_qos_ok_t *amqp_basic_qos(amqp_connection_state_t state,
+				    amqp_channel_t channel,
+				    uint32_t prefetch_size,
+				    uint16_t prefetch_count,
+				    amqp_boolean_t global)
 {
   amqp_rpc_reply_t *amqp_rpc_reply;
   amqp_rpc_reply = amqp_get_rpc_reply();
   *amqp_rpc_reply =
-    AMQP_SIMPLE_RPC(state, channel, BASIC, RETURN, RETURN,
-		    amqp_basic_return_t, 0);
-  return RPC_REPLY(amqp_basic_return_t);
+    AMQP_SIMPLE_RPC(state, channel, BASIC, QOS, QOS_OK,
+		    amqp_basic_qos_t, prefetch_size, prefetch_count, global);
+  return RPC_REPLY(amqp_basic_qos_ok_t);
 }
+
