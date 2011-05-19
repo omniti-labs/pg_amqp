@@ -8,9 +8,9 @@ REGRESS      = $(patsubst test/sql/%.sql,%,$(TESTS))
 REGRESS_OPTS = --inputdir=test
 MODULE_big   = $(patsubst %.c,%,$(wildcard src/*.c))
 OBJS         = src/pg_amqp.o \
-	librabbitmq/amqp_api.o librabbitmq/amqp_connection.o librabbitmq/amqp_debug.o \
-	librabbitmq/amqp_framing.o librabbitmq/amqp_mem.o librabbitmq/amqp_socket.o \
-	librabbitmq/amqp_table.o
+	src/librabbitmq/amqp_api.o src/librabbitmq/amqp_connection.o src/librabbitmq/amqp_debug.o \
+	src/librabbitmq/amqp_framing.o src/librabbitmq/amqp_mem.o src/librabbitmq/amqp_socket.o \
+	src/librabbitmq/amqp_table.o
 
 PG_CONFIG    = pg_config
 PG91         = $(shell $(PG_CONFIG) --version | grep -qE " 8\.| 9\.0" && echo no || echo yes)
