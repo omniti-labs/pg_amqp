@@ -7,7 +7,7 @@
    "license": "bsd",
    "status": "stable",
    "provides": {
-     "pg_amqp": {
+     "amqp": {
        "abstract": "AMQP protocol support for PostgreSQL",
        "file": "pg_amqp.sql",
        "version": "0.2.0"
