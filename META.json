@@ -4,7 +4,7 @@
    "description": "The pg_amqp package provides the ability for postgres statements to directly publish messages to an AMQP broker.",
    "version": "0.2.0",
    "maintainer": "Theo Schlossnagle <jesus@omnti.com",
-   "license": "new bsd",
+   "license": [ "bsd", "mozilla_1_0" ],
    "status": "stable",
    "meta-spec": {
       "version": "1.0.0",
