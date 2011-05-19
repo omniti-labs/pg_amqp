@@ -6,14 +6,6 @@ OBJS		= pg_amqp.o \
 DOCS		= README.pg_amqp
 DATA		= uninstall_pg_amqp.sql pg_amqp.sql
 
-ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
-else
-subdir = contrib/pg_amqp
-top_builddir = ../..
-include $(top_builddir)/src/Makefile.global
-include $(top_srcdir)/contrib/contrib-global.mk
-endif
-
