@@ -1,4 +1,4 @@
-pg_amqp 0.2.0
+pg_amqp 0.3.0
 =============
 
 The pg_amqp package provides the ability for postgres statements to directly

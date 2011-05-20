@@ -1,0 +1,3 @@
+src/librabbitmq/*.o
+src/*.o
+src/*.so

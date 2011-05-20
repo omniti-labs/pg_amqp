@@ -10,7 +10,7 @@
      "amqp": {
        "abstract": "AMQP protocol support for PostgreSQL",
        "file": "sql/amqp.sql",
-       "version": "0.2.0"
+       "version": "0.3.0"
      }
    },
    "meta-spec": {
