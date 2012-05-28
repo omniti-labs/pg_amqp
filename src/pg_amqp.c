@@ -73,7 +73,6 @@ Datum pg_amqp_disconnect(PG_FUNCTION_ARGS);
 struct brokerstate {
   int broker_id;
   amqp_connection_state_t conn;
-  int sockfd;
   int uncommitted;
   int inerror;
   int idx;
@@ -86,9 +85,14 @@ static void
 local_amqp_disconnect_bs(struct brokerstate *bs) {
   if(bs && bs->conn) {
     int errorstate = bs->inerror;
-    amqp_connection_close(bs->conn, AMQP_REPLY_SUCCESS);
-    if(bs->sockfd >= 0) close(bs->sockfd);
-    amqp_destroy_connection(bs->conn);
+    
+    if(bs->conn) {
+      amqp_connection_close(bs->conn, AMQP_REPLY_SUCCESS);
+    }
+    
+    if(bs->conn) {
+      amqp_destroy_connection(bs->conn);
+    }
     memset(bs, 0, sizeof(*bs));
     bs->inerror = errorstate;
   }
@@ -99,30 +103,42 @@ static void amqp_local_phase2(XactEvent event, void *arg) {
   switch(event) {
     case XACT_EVENT_COMMIT:
       for(bs = HEAD_BS; bs; bs = bs->next) {
-        if(bs->inerror) local_amqp_disconnect_bs(bs);
-        bs->inerror = 0;
-        if(!bs->uncommitted) continue;
-        if(bs->conn) amqp_tx_commit(bs->conn, 2, AMQP_EMPTY_TABLE);
-        reply = amqp_get_rpc_reply();
-        if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
+	if(bs->inerror) 
+	  local_amqp_disconnect_bs(bs);
+	
+	bs->inerror = 0;
+	if(!bs->uncommitted) 
+	  continue;
+	
+        if(bs->conn) 
+	  amqp_tx_commit(bs->conn, 2, AMQP_EMPTY_TABLE);
+	
+	reply = amqp_get_rpc_reply();
+	if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
           elog(WARNING, "amqp could not commit tx mode on broker %d", bs->broker_id);
           local_amqp_disconnect_bs(bs);
-        }
-        bs->uncommitted = 0;
+	}
+	bs->uncommitted = 0;
       }
       break;
     case XACT_EVENT_ABORT:
       for(bs = HEAD_BS; bs; bs = bs->next) {
-        if(bs->inerror) local_amqp_disconnect_bs(bs);
-        bs->inerror = 0;
-        if(!bs->uncommitted) continue;
-        if(bs->conn) amqp_tx_rollback(bs->conn, 2, AMQP_EMPTY_TABLE);
-        reply = amqp_get_rpc_reply();
-        if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
+	if(bs->inerror) 
+	  local_amqp_disconnect_bs(bs);
+	
+	bs->inerror = 0;
+	if(!bs->uncommitted) 
+	  continue;
+	
+        if(bs->conn) 
+	  amqp_tx_rollback(bs->conn, 2, AMQP_EMPTY_TABLE);
+	
+	reply = amqp_get_rpc_reply();
+	if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
           elog(WARNING, "amqp could not commit tx mode on broker %d", bs->broker_id);
           local_amqp_disconnect_bs(bs);
-        }
-        bs->uncommitted = 0;
+	}
+	bs->uncommitted = 0;
       }
       break;
     case XACT_EVENT_PREPARE:
@@ -136,8 +152,7 @@ void _PG_init() {
   RegisterXactCallback(amqp_local_phase2, NULL);
 }
 
-static struct brokerstate *
-local_amqp_get_a_bs(broker_id) {
+static struct brokerstate *local_amqp_get_a_bs(broker_id) {
   struct brokerstate *bs;
   for(bs = HEAD_BS; bs; bs = bs->next) {
     if(bs->broker_id == broker_id) return bs;
@@ -148,15 +163,14 @@ local_amqp_get_a_bs(broker_id) {
   HEAD_BS = bs;
   return bs;
 }
-static struct brokerstate *
-local_amqp_get_bs(broker_id) {
+static struct brokerstate *local_amqp_get_bs(broker_id) {
   char sql[1024];
   char host_copy[300] = "";
   int tries = 0;
   struct brokerstate *bs = local_amqp_get_a_bs(broker_id);
   if(bs->conn) return bs;
   if(SPI_connect() == SPI_ERROR_CONNECT) return NULL;
-  snprintf(sql, sizeof(sql), "SELECT host, port, vhost, username, password "
+  snprintf(sql, sizeof(sql), "SELECT host, port, vhost, username, password, requiressl, verify_cert, verify_cn, cert, key, key_password, ca "
                              "  FROM amqp.broker "
                              " WHERE broker_id = %d "
                              " ORDER BY host DESC, port", broker_id);
@@ -167,56 +181,117 @@ local_amqp_get_bs(broker_id) {
     if(SPI_processed > 0) {
       struct timeval hb = { .tv_sec = 2UL, .tv_usec = 0UL };
       amqp_rpc_reply_t *reply, s_reply;
-      char *host, *vhost, *user, *pass;
-      Datum port_datum;
+      char *host, *vhost, *user, *pass, *cert = NULL, *key = NULL, *ca = NULL, *key_pass = NULL;
+      Datum port_datum, requiressl_datum;
       bool is_null;
+      bool requiressl= false, verifyCert = false, verifyCN = false;
       int port = 5672;
+      int ssl_flags = 0;
+      int success = 0;
+      
       bs->idx = (bs->idx + 1) % SPI_processed;
+      
       host = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 1);
-      if(!host) host = "localhost";
+      if(!host) 
+	host = "localhost";
+      
       port_datum = SPI_getbinval(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 2, &is_null);
-      if(!is_null) port = DatumGetInt32(port_datum);
+      if(!is_null) 
+	port = DatumGetInt32(port_datum);
+      
       vhost = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 3);
-      if(!vhost) vhost = "/";
+      if(!vhost) 
+	vhost = "/";
+      
       user = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 4);
-      if(!user) user = "guest";
+      if(!user) 
+	user = "guest";
+      
       pass = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 5);
-      if(!pass) pass = "guest";
+      if(!pass) 
+	pass = "guest";
+      
+      /* ssl data */
+      requiressl_datum = SPI_getbinval(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 6, &is_null);
+      if(!is_null) 
+	requiressl = DatumGetBool(requiressl_datum);
+      
+      requiressl_datum = SPI_getbinval(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 7, &is_null);
+      if(!is_null) 
+	verifyCert = DatumGetBool(requiressl_datum);
+      
+      requiressl_datum = SPI_getbinval(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 8, &is_null);
+      if(!is_null) 
+	verifyCN = DatumGetBool(requiressl_datum);
+      
+      /* get ssl values */
+      cert = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 9);
+      key = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 10);
+      key_pass = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 11);
+      ca = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 12);
+      
+      /* set ssl flags */
+      if(verifyCert)
+	ssl_flags |= AMQP_SSL_FLAG_VERIFY;
+      
+      if(verifyCN)
+	ssl_flags |= AMQP_SSL_FLAG_CHECK_CN;
+      
+      
       snprintf(host_copy, sizeof(host_copy), "%s:%d", host, port);
 
-      bs->conn = amqp_new_connection();
-      if(!bs->conn) { SPI_finish(); return NULL; }
-      bs->sockfd = amqp_open_socket(host, port, &hb);
-      if(bs->sockfd < 0) {
-        elog(WARNING, "amqp[%s] login socket/connect failed: %s",
-             host_copy, strerror(-bs->sockfd));
-        goto busted;
+      do{
+	bs->conn = amqp_new_ssl_connection(cert, key, key_pass, ca, ssl_flags);
+	if( NULL != bs->conn) {
+	  elog(INFO, "amqp[%s] successfully created ssl connection for broker %d", host_copy, broker_id);
+	  break;
+	}
+	
+	/* ssl is not required, try create unsecure connection */
+	if( !requiressl ) {
+	  bs->conn = amqp_new_connection();
+	} else {
+	  elog(WARNING, "amqp[%s] unable to create ssl connetion, but ssl is required", host_copy);
+	}
+	
+	
+	if(!bs->conn) { 
+	  SPI_finish(); 
+	  return NULL; 
+	}
+      }while(0);
+      
+//       bs->sockfd = amqp_open_socket(host, port, &hb);
+      success = amqp_connect(bs->conn, host, port, &hb);
+      if(!success) {
+//         elog(WARNING, "amqp[%s] login socket/connect failed: %s", host_copy, strerror(-bs->sockfd));
+	elog(WARNING, "amqp[%s] login socket/connect failed!", host_copy);
+	goto busted;
       }
-      amqp_set_sockfd(bs->conn, bs->sockfd);
-      s_reply = amqp_login(bs->conn, vhost, 0, 131072,
-                           0, AMQP_SASL_METHOD_PLAIN,
+//       amqp_set_sockfd(bs->conn, bs->sockfd);
+      s_reply = amqp_login(bs->conn, vhost, 0, 131072, 0, AMQP_SASL_METHOD_PLAIN,
                            user, pass);
       if(s_reply.reply_type != AMQP_RESPONSE_NORMAL) {
-        elog(WARNING, "amqp[%s] login failed on broker %d", host_copy, broker_id);
-        goto busted;
+	elog(WARNING, "amqp[%s] login failed on broker %d", host_copy, broker_id);
+	goto busted;
       }
       amqp_channel_open(bs->conn, 1);
       reply = amqp_get_rpc_reply();
       if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-        elog(WARNING, "amqp[%s] channel open failed on broker %d", host_copy, broker_id);
-        goto busted;
+	elog(WARNING, "amqp[%s] channel open failed on broker %d", host_copy, broker_id);
+	goto busted;
       }
       amqp_channel_open(bs->conn, 2);
       reply = amqp_get_rpc_reply();
       if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-        elog(WARNING, "amqp[%s] channel open failed on broker %d", host_copy, broker_id);
-        goto busted;
+	elog(WARNING, "amqp[%s] channel open failed on broker %d", host_copy, broker_id);
+	goto busted;
       }
       amqp_tx_select(bs->conn, 2, AMQP_EMPTY_TABLE);
       reply = amqp_get_rpc_reply();
       if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-        elog(WARNING, "amqp[%s] could not start tx mode on broker %d", host_copy, broker_id);
-        goto busted;
+	elog(WARNING, "amqp[%s] could not start tx mode on broker %d", host_copy, broker_id);
+	goto busted;
       }
     } else {
       elog(WARNING, "amqp can't find broker %d", broker_id);
@@ -235,15 +310,14 @@ local_amqp_get_bs(broker_id) {
   local_amqp_disconnect_bs(bs);
   return bs;
 }
-static void
-local_amqp_disconnect(broker_id) {
+
+static void local_amqp_disconnect(broker_id) {
   struct brokerstate *bs = local_amqp_get_a_bs(broker_id);
   local_amqp_disconnect_bs(bs);
 }
 
 PG_FUNCTION_INFO_V1(pg_amqp_exchange_declare);
-Datum
-pg_amqp_exchange_declare(PG_FUNCTION_ARGS) {
+Datum pg_amqp_exchange_declare(PG_FUNCTION_ARGS) {
   struct brokerstate *bs;
   if(!PG_ARGISNULL(0)) {
     int broker_id;
@@ -273,8 +347,7 @@ pg_amqp_exchange_declare(PG_FUNCTION_ARGS) {
   }
   PG_RETURN_BOOL(0 != 0);
 }
-static Datum
-pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
+static Datum pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
   struct brokerstate *bs;
   if(!PG_ARGISNULL(0)) {
     int broker_id;
@@ -294,8 +367,7 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
       set_bytes_from_text(exchange_b,1);
       set_bytes_from_text(routing_key_b,2);
       set_bytes_from_text(body_b,3);
-      rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b,
-                              mandatory, immediate, NULL, body_b);
+      rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b, mandatory, immediate, NULL, body_b);
       reply = amqp_get_rpc_reply();
       if(rv || reply->reply_type != AMQP_RESPONSE_NORMAL) {
         if(once_more && (channel == 1 || bs->uncommitted == 0)) {
@@ -315,20 +387,17 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
 }
 
 PG_FUNCTION_INFO_V1(pg_amqp_publish);
-Datum
-pg_amqp_publish(PG_FUNCTION_ARGS) {
+Datum pg_amqp_publish(PG_FUNCTION_ARGS) {
   return pg_amqp_publish_opt(fcinfo, 2);
 }
 
 PG_FUNCTION_INFO_V1(pg_amqp_autonomous_publish);
-Datum
-pg_amqp_autonomous_publish(PG_FUNCTION_ARGS) {
+Datum pg_amqp_autonomous_publish(PG_FUNCTION_ARGS) {
   return pg_amqp_publish_opt(fcinfo, 1);
 }
 
 PG_FUNCTION_INFO_V1(pg_amqp_disconnect);
-Datum
-pg_amqp_disconnect(PG_FUNCTION_ARGS) {
+Datum pg_amqp_disconnect(PG_FUNCTION_ARGS) {
   if(!PG_ARGISNULL(0)) {
     int broker_id;
     broker_id = PG_GETARG_INT32(0);
