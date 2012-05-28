@@ -1,8 +1,9 @@
-pg_amqp 0.3.0
+pg_amqp 0.4.0
 =============
 
 The pg_amqp package provides the ability for postgres statements to directly
-publish messages to an [AMQP](http://www.amqp.org/) broker.
+publish messages to an [AMQP](http://www.amqp.org/) broker. Version 0.4.0 also provides an implementation 
+for secured connections using open ssl. To build v0.4.0 openssl dev package is required.
 
 Building
 --------
