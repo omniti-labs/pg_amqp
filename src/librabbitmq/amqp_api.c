@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <errno.h>
 
+#define DISABLE_THREADS
+
 #ifndef DISABLE_THREADS
 #include <pthread.h>
 #endif

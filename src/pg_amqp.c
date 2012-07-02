@@ -37,6 +37,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/socket.h>
+#include <string.h>
 
 #include "postgres.h"
 #include "funcapi.h"
@@ -50,6 +51,8 @@
 #include "access/xact.h"
 #include "utils/memutils.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
+#include "utils/array.h"
 #include "librabbitmq/amqp.h"
 #include "librabbitmq/amqp_framing.h"
 
@@ -60,6 +63,8 @@
     var.len = VARSIZE_ANY_EXHDR(txt); \
   } \
 } while(0)
+
+#define safe_free(x) if (x){ free(x); x = NULL; }
 
 #ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
@@ -291,23 +296,105 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
       amqp_bytes_t routing_key_b = amqp_cstring_bytes("");
       amqp_bytes_t body_b = amqp_cstring_bytes("");
 
+      amqp_basic_properties_t properties;
+
+      memset(&properties, 0, sizeof(properties));
+      
       set_bytes_from_text(exchange_b,1);
       set_bytes_from_text(routing_key_b,2);
       set_bytes_from_text(body_b,3);
+
+      if (!PG_ARGISNULL(4)) {
+        ArrayType *v;
+        int *dims, ndims;
+        Oid element_type;
+        int typlen;
+        bool typbyval;
+        char typalign;
+        char typdelim;
+        Oid typelem;
+        Oid typiofunc;
+        FmgrInfo proc;
+
+        ArrayIterator iter;
+        Datum value;
+        bool isnull;
+        int i;
+
+        v  = PG_GETARG_ARRAYTYPE_P(4);
+        
+        ndims = ARR_NDIM(v);
+        dims = ARR_DIMS(v);
+
+        if (ndims != 2 || dims[1] != 2){
+          elog(ERROR, "headers must be n x 2 dimensional array");
+          PG_RETURN_BOOL(0 != 0);
+        }
+        
+        if (array_contains_nulls(v)){
+          elog(ERROR, "headers may not contain NULLs");
+          PG_RETURN_BOOL(0 != 0);
+        }
+
+        element_type = ARR_ELEMTYPE(v);
+
+        get_type_io_data(element_type, IOFunc_output,
+                         (int16*)&typlen, &typbyval,
+                         &typalign, &typdelim,
+                         &typelem, &typiofunc);
+        
+        fmgr_info_cxt(typiofunc, &proc, fcinfo->flinfo->fn_mcxt);
+
+        properties.headers.num_entries = dims[0];
+        properties._flags |= AMQP_BASIC_HEADERS_FLAG;
+        properties.headers.entries = malloc(dims[0] * sizeof(amqp_table_entry_t));
+        if (!properties.headers.entries){
+          elog(ERROR, "out of memory");
+          PG_RETURN_BOOL(0 != 0);
+        }
+        
+        iter = array_create_iterator(v, 0);
+        i = 0;
+        while (array_iterate(iter, &value, &isnull)){
+          char* key;
+          char* bytes;
+          key = DatumGetCString(FunctionCall3(&proc, value, ObjectIdGetDatum(typelem), Int32GetDatum(-1)));
+          if (!array_iterate(iter, &value, &isnull)){
+            elog(ERROR, "array is fucked");
+            safe_free(properties.headers.entries);
+            PG_RETURN_BOOL(0 != 0);
+          }
+          bytes = DatumGetCString(FunctionCall3(&proc, value, ObjectIdGetDatum(typelem), Int32GetDatum(-1)));
+          properties.headers.entries[i].key.len = strlen(key);
+          properties.headers.entries[i].key.bytes = key;
+          properties.headers.entries[i].kind = 'S';
+          properties.headers.entries[i].value.bytes.len = strlen(bytes);
+          properties.headers.entries[i].value.bytes.bytes = bytes;
+          i++;
+        }
+        
+      }
+      if (!PG_ARGISNULL(5)){
+        set_bytes_from_text(properties.content_type,5);
+        properties._flags |= AMQP_BASIC_CONTENT_TYPE_FLAG;
+      }
       rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b,
-                              mandatory, immediate, NULL, body_b);
+                              mandatory, immediate, &properties, body_b);
       reply = amqp_get_rpc_reply();
       if(rv || reply->reply_type != AMQP_RESPONSE_NORMAL) {
         if(once_more && (channel == 1 || bs->uncommitted == 0)) {
           once_more = 0;
           local_amqp_disconnect_bs(bs);
+          safe_free(properties.headers.entries);
           goto redo;
         }
         bs->inerror = 1;
+        safe_free(properties.headers.entries);
         PG_RETURN_BOOL(0 != 0);
       }
       /* channel two is transactional */
       if(channel == 2) bs->uncommitted++;
+      safe_free(properties.headers.entries);
       PG_RETURN_BOOL(rv == 0);
     }
   }
