@@ -34,6 +34,23 @@ to find it:
 
     env PG_CONFIG=/path/to/pg_config make && make install
 
+Some prepackaged Mac installs of postgres might need a little coaxing with
+modern XCodes.  If you encounter an error such as:
+
+    make: /Applications/Xcode.app/Contents/Developer/Toolchains/OSX10.8.xctoolchain/usr/bin/cc: No such file or directory
+
+Then you'll need to link the toolchain
+
+    sudo ln -s /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain /Applications/Xcode.app/Contents/Developer/Toolchains/OSX10.8.xctoolchain
+
+And if you encounter an error about a missing `/usr/bin/postgres`:
+
+    ld: file not found: /usr/bin/postgres
+
+You might need to link in your real postgres:
+
+    sudo ln -s /usr/bin/postgres_real /usr/bin/postgres
+
 Loading
 -------
 
