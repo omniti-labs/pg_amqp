@@ -37,6 +37,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/socket.h>
+#include <string.h>
 
 #include "postgres.h"
 #include "funcapi.h"
@@ -50,6 +51,8 @@
 #include "access/xact.h"
 #include "utils/memutils.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
+#include "utils/array.h"
 #include "librabbitmq/amqp.h"
 #include "librabbitmq/amqp_framing.h"
 
@@ -61,15 +64,62 @@
   } \
 } while(0)
 
+#define safe_free(x) if (x){ free(x); x = NULL; }
+
+#define _BYTES_T 0
+#define _UINT64_T 1
+#define _UINT8_T 2
+
 #ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
 #endif
+
+typedef struct {
+  FmgrInfo proc;
+  int elems;
+  Oid typelem;
+  ArrayIterator iter;
+} pg_array_foo;
+
+typedef struct {
+  char* key;
+  char* value;
+} pg_array_elem;
+
+typedef struct {
+  char* name;
+  size_t offset;
+  int type;
+  int flag;
+} amqp_field;
+
+/* TODO: make this a trie or some other optimised datastructure */
+static amqp_field amqp_fields[] = { { "content_type", offsetof(amqp_basic_properties_t,content_type), _BYTES_T, AMQP_BASIC_CONTENT_TYPE_FLAG},
+                                    { "content_encoding", offsetof(amqp_basic_properties_t,content_encoding), _BYTES_T, AMQP_BASIC_CONTENT_ENCODING_FLAG},
+                                    { "delivery_mode", offsetof(amqp_basic_properties_t,delivery_mode), _UINT8_T, AMQP_BASIC_DELIVERY_MODE_FLAG},
+                                    { "priority", offsetof(amqp_basic_properties_t,priority), _UINT8_T, AMQP_BASIC_PRIORITY_FLAG},
+                                    { "correlation_id", offsetof(amqp_basic_properties_t,correlation_id), _BYTES_T, AMQP_BASIC_CORRELATION_ID_FLAG},
+                                    { "reply_to", offsetof(amqp_basic_properties_t,reply_to), _BYTES_T, AMQP_BASIC_REPLY_TO_FLAG},
+                                    { "expiration", offsetof(amqp_basic_properties_t,expiration), _BYTES_T, AMQP_BASIC_EXPIRATION_FLAG},
+                                    { "message_id", offsetof(amqp_basic_properties_t,message_id), _BYTES_T, AMQP_BASIC_MESSAGE_ID_FLAG},
+                                    { "timestamp", offsetof(amqp_basic_properties_t,timestamp), _UINT64_T, AMQP_BASIC_TIMESTAMP_FLAG},
+                                    { "type", offsetof(amqp_basic_properties_t,type), _BYTES_T, AMQP_BASIC_TYPE_FLAG},
+                                    { "user_id", offsetof(amqp_basic_properties_t,user_id), _BYTES_T, AMQP_BASIC_USER_ID_FLAG},
+                                    { "app_id", offsetof(amqp_basic_properties_t,app_id), _BYTES_T, AMQP_BASIC_APP_ID_FLAG},
+                                    { "cluster_id", offsetof(amqp_basic_properties_t,cluster_id), _BYTES_T, AMQP_BASIC_CLUSTER_ID_FLAG},
+                                    { NULL, 0, 0, 0}
+};
+
 void _PG_init(void);
 Datum pg_amqp_exchange_declare(PG_FUNCTION_ARGS);
 Datum pg_amqp_publish(PG_FUNCTION_ARGS);
 Datum pg_amqp_autonomous_publish(PG_FUNCTION_ARGS);
 Datum pg_amqp_disconnect(PG_FUNCTION_ARGS);
 
+int pg_process_array(ArrayType* v, FunctionCallInfoData* fcinfo, pg_array_foo* array_foo);
+int pg_array_get_elem(pg_array_foo* array_foo, pg_array_elem* elem);
+int amqp_set_property(amqp_basic_properties_t* properties, char* key, char* value);
+  
 struct brokerstate {
   int broker_id;
   amqp_connection_state_t conn;
@@ -347,7 +397,90 @@ Datum pg_amqp_exchange_declare(PG_FUNCTION_ARGS) {
   }
   PG_RETURN_BOOL(0 != 0);
 }
-static Datum pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
+
+
+int pg_process_array(ArrayType* v, FunctionCallInfoData* fcinfo, pg_array_foo* array_foo){
+  int *dims, ndims;
+  Oid element_type;
+  int typlen;
+  bool typbyval;
+  char typalign;
+  char typdelim;
+  Oid typiofunc;
+
+  ndims = ARR_NDIM(v);
+  dims = ARR_DIMS(v);
+
+  if (ndims != 2 || dims[1] != 2){
+    elog(ERROR, "headers must be n x 2 dimensional array");
+    return 1;
+  }
+  
+  if (array_contains_nulls(v)){
+    elog(ERROR, "headers may not contain NULLs");
+    return 1;
+  }
+
+  element_type = ARR_ELEMTYPE(v);
+
+  get_type_io_data(element_type, IOFunc_output,
+                   (int16*)&typlen, &typbyval,
+                   &typalign, &typdelim,
+                   &array_foo->typelem, &typiofunc);
+  
+  fmgr_info_cxt(typiofunc, &array_foo->proc, fcinfo->flinfo->fn_mcxt);
+  array_foo->elems = dims[0];
+  array_foo->iter = array_create_iterator(v, 0);
+  return 0;
+}
+
+int pg_array_get_elem(pg_array_foo* array_foo, pg_array_elem* elem){
+  bool isnull;
+  Datum value;
+  if (array_iterate(array_foo->iter, &value, &isnull)){
+    elem->key = DatumGetCString(FunctionCall3(&array_foo->proc, value, ObjectIdGetDatum(array_foo->typelem), Int32GetDatum(-1)));
+    if (!array_iterate(array_foo->iter, &value, &isnull)){
+      elog(ERROR, "array seriously fucked");
+      return 2;
+    }
+    elem->key = DatumGetCString(FunctionCall3(&array_foo->proc, value, ObjectIdGetDatum(array_foo->typelem), Int32GetDatum(-1)));
+  } else {
+    elem->key = NULL;
+    elem->value = NULL;
+    return 1;
+  }
+  return 0;
+}
+
+int amqp_set_property(amqp_basic_properties_t* properties, char* key, char* value){
+  int i;
+  void* field;
+  for (i = 0; amqp_fields[i].name; i++)
+    if (!strcmp(key,amqp_fields[i].name))
+      break;
+  if (!amqp_fields[i].name)
+    return 1;
+
+  field = (void*)((size_t)&properties->headers + amqp_fields[i].offset);
+
+  switch (amqp_fields[i].type) {
+  case _BYTES_T:
+    ((amqp_bytes_t*)field)->len = strlen(value);
+    ((amqp_bytes_t*)field)->bytes = value;
+    break;
+  case _UINT64_T:
+    *(uint64_t*)field = (uint64_t)atoi(value);
+    break;
+  case _UINT8_T:
+    *(uint8_t*)field = (uint8_t)atoi(value);
+    break;
+  }
+  properties->_flags |= amqp_fields[i].flag;
+  return 0;
+}
+
+static Datum
+pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
   struct brokerstate *bs;
   if(!PG_ARGISNULL(0)) {
     int broker_id;
@@ -364,22 +497,88 @@ static Datum pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
       amqp_bytes_t routing_key_b = amqp_cstring_bytes("");
       amqp_bytes_t body_b = amqp_cstring_bytes("");
 
+      amqp_basic_properties_t properties;
+      memset(&properties, 0, sizeof(properties));
+      
       set_bytes_from_text(exchange_b,1);
       set_bytes_from_text(routing_key_b,2);
       set_bytes_from_text(body_b,3);
-      rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b, mandatory, immediate, NULL, body_b);
+
+      if (!PG_ARGISNULL(4)) {
+        ArrayType *v;
+        pg_array_foo array_foo;
+        pg_array_elem array_elem;
+        int i;
+        int ret;
+
+        v  = PG_GETARG_ARRAYTYPE_P(4);
+        if (!pg_process_array(v, fcinfo, &array_foo))
+          PG_RETURN_BOOL(0 != 0);
+        
+        properties.headers.num_entries = array_foo.elems;
+        properties._flags |= AMQP_BASIC_HEADERS_FLAG;
+        properties.headers.entries = malloc(array_foo.elems * sizeof(amqp_table_entry_t));
+        if (!properties.headers.entries){
+          elog(ERROR, "out of memory");
+          PG_RETURN_BOOL(0 != 0);
+        }
+
+        i = 0;
+        while ((ret = pg_array_get_elem(&array_foo, &array_elem))){
+          properties.headers.entries[i].key.len = strlen(array_elem.key);
+          properties.headers.entries[i].key.bytes = array_elem.key;
+          properties.headers.entries[i].kind = 'S';
+          properties.headers.entries[i].value.bytes.len = strlen(array_elem.value);
+          properties.headers.entries[i].value.bytes.bytes = array_elem.value;
+          i++;
+        }
+        if (ret == 2)
+          PG_RETURN_BOOL(0 != 0);
+        
+      }
+      if (!PG_ARGISNULL(5)) {
+        ArrayType *v;
+        pg_array_foo array_foo;
+        pg_array_elem array_elem;
+        int ret;
+
+        v  = PG_GETARG_ARRAYTYPE_P(5);
+        if (!pg_process_array(v, fcinfo, &array_foo))
+          PG_RETURN_BOOL(0 != 0);
+        
+        properties.headers.num_entries = array_foo.elems;
+        properties._flags |= AMQP_BASIC_HEADERS_FLAG;
+        properties.headers.entries = malloc(array_foo.elems * sizeof(amqp_table_entry_t));
+        if (!properties.headers.entries){
+          elog(ERROR, "out of memory");
+          PG_RETURN_BOOL(0 != 0);
+        }
+
+        while ((ret = pg_array_get_elem(&array_foo, &array_elem)))
+          if (amqp_set_property(&properties, array_elem.key, array_elem.value))
+              PG_RETURN_BOOL(0 != 0);
+        
+        if (ret == 2)
+          PG_RETURN_BOOL(0 != 0);
+      }
+      
+      rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b, mandatory, immediate, &properties, body_b);
+
       reply = amqp_get_rpc_reply();
       if(rv || reply->reply_type != AMQP_RESPONSE_NORMAL) {
         if(once_more && (channel == 1 || bs->uncommitted == 0)) {
           once_more = 0;
           local_amqp_disconnect_bs(bs);
+          safe_free(properties.headers.entries);
           goto redo;
         }
         bs->inerror = 1;
+        safe_free(properties.headers.entries);
         PG_RETURN_BOOL(0 != 0);
       }
       /* channel two is transactional */
       if(channel == 2) bs->uncommitted++;
+      safe_free(properties.headers.entries);
       PG_RETURN_BOOL(rv == 0);
     }
   }
