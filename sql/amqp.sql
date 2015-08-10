@@ -10,23 +10,29 @@ comment on function amqp.exchange_declare(integer, varchar, varchar, boolean, bo
 auto_delete should be set to false as unexpected errors can cause disconnect/reconnect which
 would trigger the auto deletion of the exchange.';
 
-create function amqp.publish(integer, varchar, varchar, varchar)
+create function amqp.publish(integer, varchar, varchar, varchar, integer default null, 
+			     varchar default null, varchar default null, varchar default null)
 returns boolean as 'pg_amqp.so', 'pg_amqp_publish'
 language C immutable;
 
-comment on function amqp.publish(integer, varchar, varchar, varchar) is
+comment on function amqp.publish(integer, varchar, varchar, varchar, integer,
+				 varchar, varchar, varchar) is
 'Publishes a message (broker_id, exchange, routing_key, message).  The message will only
 be published if the containing PostgreSQL transaction successfully commits.  Under certain
-circumstances, the AMQP commit might fail.  In this case, a WARNING is emitted.
+circumstances, the AMQP commit might fail.  In this case, a WARNING is emitted. The last
+four parameters are optional and set the following message properties: delivery_mode (either 1 or 2), 
+content_type, reply_to and correlation_id.
 
 Publish returns a boolean indicating if the publish command was successful.  Note that as
 AMQP publish is asynchronous, you may find out later it was unsuccessful.';
 
-create function amqp.autonomous_publish(integer, varchar, varchar, varchar)
+create function amqp.autonomous_publish(integer, varchar, varchar, varchar, integer default null,
+					varchar default null, varchar default null, varchar default null)
 returns boolean as 'pg_amqp.so', 'pg_amqp_autonomous_publish'
 language C immutable;
 
-comment on function amqp.autonomous_publish(integer, varchar, varchar, varchar) is
+comment on function amqp.autonomous_publish(integer, varchar, varchar, varchar, integer,
+					    varchar, varchar, varchar) is
 'Works as amqp.publish does, but the message is published immediately irrespective of the
 current transaction state.  PostgreSQL commit and rollback at a later point will have no
 effect on this message being sent to AMQP.';
