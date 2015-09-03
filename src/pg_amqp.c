@@ -278,6 +278,8 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
   struct brokerstate *bs;
   if(!PG_ARGISNULL(0)) {
     int broker_id;
+    amqp_basic_properties_t properties;
+    
     int once_more = 1;
     broker_id = PG_GETARG_INT32(0);
   redo:
@@ -289,13 +291,50 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
       amqp_boolean_t immediate = 0;
       amqp_bytes_t exchange_b = amqp_cstring_bytes("amq.direct");
       amqp_bytes_t routing_key_b = amqp_cstring_bytes("");
-      amqp_bytes_t body_b = amqp_cstring_bytes("");
+      amqp_bytes_t body_b = amqp_cstring_bytes(""); 
+      properties._flags = 0;
+      
+      /* Sets delivery_mode */
+      if (!PG_ARGISNULL(4)) {
+	  if (PG_GETARG_INT32(4) == 1 || PG_GETARG_INT32(4) == 2) {
+	      properties._flags |= AMQP_BASIC_DELIVERY_MODE_FLAG;
+              properties.delivery_mode = PG_GETARG_INT32(4);
+	  } else {
+              elog(WARNING, "Ignored delivery_mode %d, value should be 1 or 2", 
+                  PG_GETARG_INT32(4));
+	  }
+      }
 
+      /* Sets content_type */
+      if (!PG_ARGISNULL(5)) {
+	  properties._flags |= AMQP_BASIC_CONTENT_TYPE_FLAG;
+	  set_bytes_from_text(properties.content_type, 5);
+      }
+
+      /* Sets reply_to */
+      if (!PG_ARGISNULL(6)) {
+	  properties._flags |= AMQP_BASIC_REPLY_TO_FLAG;
+	  set_bytes_from_text(properties.reply_to, 6);
+      }
+
+      /* Sets correlation_id */
+      if (!PG_ARGISNULL(7)) {
+	  properties._flags |= AMQP_BASIC_CORRELATION_ID_FLAG;
+	  set_bytes_from_text(properties.correlation_id, 7);
+      }
+      
       set_bytes_from_text(exchange_b,1);
       set_bytes_from_text(routing_key_b,2);
       set_bytes_from_text(body_b,3);
-      rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b,
-                              mandatory, immediate, NULL, body_b);
+
+      if (properties._flags == 0) {
+          rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b,
+                                  mandatory, immediate, NULL, body_b);
+      } else {
+          rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b,
+                                  mandatory, immediate, &properties, body_b);
+      }
+
       reply = amqp_get_rpc_reply();
       if(rv || reply->reply_type != AMQP_RESPONSE_NORMAL) {
         if(once_more && (channel == 1 || bs->uncommitted == 0)) {

@@ -1,0 +1,7 @@
+0.4.0
+-- Add support for commonly used amqp message properties (delivery_mode, content_type, reply_to and correlation_id) for publish() and autonomous_publish(). Many thanks to netalien for the contribution. (Github PR #13).
+-- This software is now only supported as a PostgreSQL Extension. PG versions prior to 9.1 and means to install it without the extension system are no longer officially supported. PostgreSQL 9.0 is EOL as of Sept 2015 (http://www.postgresql.org/support/versioning/)
+-- Added support for upgrading extension installation from 0.3.0 to 0.4.0. If pg_amqp is not installed as an extension, you must turn it into one before updating. See the README for instructions on doing this.
+-- Named all SQL function parameters so explicit value setting can be used.
+
+
