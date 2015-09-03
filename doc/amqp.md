@@ -1,4 +1,4 @@
-amqp 0.3.0
+pg_amqp
 ==========
 
 Usage
