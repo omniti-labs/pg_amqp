@@ -4,6 +4,9 @@ pg_amqp 0.3.0
 The pg_amqp package provides the ability for postgres statements to directly
 publish messages to an [AMQP](http://www.amqp.org/) broker.
 
+All bug reports, feature requests and general questions can be directed to the Issues section on Github. - http://github.com/omniti-labs/pg_amqp
+
+
 Building
 --------
 
@@ -58,23 +61,25 @@ postgresql config
 
     shared_preload_libraries = 'pg_amqp.so'
 
-Then, If you're running PostgreSQL 9.1.0 or greater, loading amqp is as simple
-as connecting to a database as a super user and running:
+This extension requires PostgreSQL 9.1.0 or greater, so loading amqp is as simple
+as connecting to a database as a super user and running 
+(currently requires being in amqp schema):
 
-    CREATE EXTENSION amqp;
+    CREATE EXTENSION amqp SCHEMA amqp;
 
 If you've upgraded your cluster to PostgreSQL 9.1 and already had amqp
 installed, you can upgrade it to a properly packaged extension with:
 
     CREATE EXTENSION amqp FROM unpackaged;
 
-For versions of PostgreSQL less than 9.1.0, you'll need to run the
-installation script:
+This is required to update to any versions >= 0.4.0.
 
-    psql -d mydb -f /path/to/pgsql/share/contrib/amqp.sql
+To update to the latest version, run the following command after running "make install" again:
 
-Using
------
+    ALTER EXTENSION amqp UPDATE;
+
+Basic Usage
+-----------
 
 Insert AMQP broker information (host/port/user/pass) into the
 `amqp.broker` table.
