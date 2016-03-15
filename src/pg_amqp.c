@@ -105,7 +105,7 @@ static void amqp_local_phase2(XactEvent event, void *arg) {
         if(bs->conn) amqp_tx_commit(bs->conn, 2, AMQP_EMPTY_TABLE);
         reply = amqp_get_rpc_reply();
         if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-          elog(WARNING, "amqp could not commit tx mode on broker %d", bs->broker_id);
+          elog(WARNING, "amqp could not commit tx mode on broker %d, reply_type=%d, library_errno=%d", bs->broker_id, reply->reply_type, reply->library_errno);
           local_amqp_disconnect_bs(bs);
         }
         bs->uncommitted = 0;
@@ -119,7 +119,7 @@ static void amqp_local_phase2(XactEvent event, void *arg) {
         if(bs->conn) amqp_tx_rollback(bs->conn, 2, AMQP_EMPTY_TABLE);
         reply = amqp_get_rpc_reply();
         if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-          elog(WARNING, "amqp could not commit tx mode on broker %d", bs->broker_id);
+          elog(WARNING, "amqp could not rollback tx mode on broker %d, reply_type=%d, library_errno=%d", bs->broker_id, reply->reply_type, reply->library_errno);
           local_amqp_disconnect_bs(bs);
         }
         bs->uncommitted = 0;
