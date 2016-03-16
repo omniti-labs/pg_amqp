@@ -1,3 +1,6 @@
-src/librabbitmq/*.o
-src/*.o
-src/*.so
+ignore/*
+*.swp
+*.swo
+.deps/*
+*.o
+*.so

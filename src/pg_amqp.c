@@ -153,19 +153,13 @@ static void amqp_local_phase2(XactEvent event, void *arg) {
   switch(event) {
     case XACT_EVENT_COMMIT:
       for(bs = HEAD_BS; bs; bs = bs->next) {
-	if(bs->inerror) 
-	  local_amqp_disconnect_bs(bs);
-	
-	bs->inerror = 0;
-	if(!bs->uncommitted) 
-	  continue;
-	
-        if(bs->conn) 
-	  amqp_tx_commit(bs->conn, 2, AMQP_EMPTY_TABLE);
-	
-	reply = amqp_get_rpc_reply();
-	if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-          elog(WARNING, "amqp could not commit tx mode on broker %d", bs->broker_id);
+	if(bs->inerror) local_amqp_disconnect_bs(bs);
+        bs->inerror = 0;
+        if(!bs->uncommitted) continue;
+        if(bs->conn) amqp_tx_commit(bs->conn, 2, AMQP_EMPTY_TABLE);
+        reply = amqp_get_rpc_reply();
+        if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
+          elog(WARNING, "amqp could not commit tx mode on broker %d, reply_type=%d, library_errno=%d", bs->broker_id, reply->reply_type, reply->library_errno);
           local_amqp_disconnect_bs(bs);
 	}
 	bs->uncommitted = 0;
@@ -173,24 +167,20 @@ static void amqp_local_phase2(XactEvent event, void *arg) {
       break;
     case XACT_EVENT_ABORT:
       for(bs = HEAD_BS; bs; bs = bs->next) {
-	if(bs->inerror) 
-	  local_amqp_disconnect_bs(bs);
-	
-	bs->inerror = 0;
-	if(!bs->uncommitted) 
-	  continue;
-	
-        if(bs->conn) 
-	  amqp_tx_rollback(bs->conn, 2, AMQP_EMPTY_TABLE);
-	
-	reply = amqp_get_rpc_reply();
-	if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-          elog(WARNING, "amqp could not commit tx mode on broker %d", bs->broker_id);
+        if(bs->inerror) local_amqp_disconnect_bs(bs);
+        bs->inerror = 0;
+        if(!bs->uncommitted) continue;
+        if(bs->conn) amqp_tx_rollback(bs->conn, 2, AMQP_EMPTY_TABLE);
+        reply = amqp_get_rpc_reply();
+        if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
+          elog(WARNING, "amqp could not rollback tx mode on broker %d, reply_type=%d, library_errno=%d", bs->broker_id, reply->reply_type, reply->library_errno);
           local_amqp_disconnect_bs(bs);
 	}
 	bs->uncommitted = 0;
       }
       break;
+    case XACT_EVENT_PRE_COMMIT:
+    case XACT_EVENT_PRE_PREPARE:
     case XACT_EVENT_PREPARE:
       /* nothin' */
       return;
@@ -484,6 +474,8 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
   struct brokerstate *bs;
   if(!PG_ARGISNULL(0)) {
     int broker_id;
+    amqp_basic_properties_t properties;
+    
     int once_more = 1;
     broker_id = PG_GETARG_INT32(0);
   redo:
@@ -495,23 +487,52 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
       amqp_boolean_t immediate = 0;
       amqp_bytes_t exchange_b = amqp_cstring_bytes("amq.direct");
       amqp_bytes_t routing_key_b = amqp_cstring_bytes("");
-      amqp_bytes_t body_b = amqp_cstring_bytes("");
-
-      amqp_basic_properties_t properties;
-      memset(&properties, 0, sizeof(properties));
+      amqp_bytes_t body_b = amqp_cstring_bytes(""); 
+      properties._flags = 0;
+      
       
       set_bytes_from_text(exchange_b,1);
       set_bytes_from_text(routing_key_b,2);
       set_bytes_from_text(body_b,3);
-
+      
+      /* Sets delivery_mode */
       if (!PG_ARGISNULL(4)) {
+	  if (PG_GETARG_INT32(4) == 1 || PG_GETARG_INT32(4) == 2) {
+	      properties._flags |= AMQP_BASIC_DELIVERY_MODE_FLAG;
+              properties.delivery_mode = PG_GETARG_INT32(4);
+	  } else {
+              elog(WARNING, "Ignored delivery_mode %d, value should be 1 or 2", 
+                  PG_GETARG_INT32(4));
+	  }
+      }
+
+      /* Sets content_type */
+      if (!PG_ARGISNULL(5)) {
+	  properties._flags |= AMQP_BASIC_CONTENT_TYPE_FLAG;
+	  set_bytes_from_text(properties.content_type, 5);
+      }
+
+      /* Sets reply_to */
+      if (!PG_ARGISNULL(6)) {
+	  properties._flags |= AMQP_BASIC_REPLY_TO_FLAG;
+	  set_bytes_from_text(properties.reply_to, 6);
+      }
+
+      /* Sets correlation_id */
+      if (!PG_ARGISNULL(7)) {
+	  properties._flags |= AMQP_BASIC_CORRELATION_ID_FLAG;
+	  set_bytes_from_text(properties.correlation_id, 7);
+      }
+
+      /* headers */
+      if (!PG_ARGISNULL(8)) {
         ArrayType *v;
         pg_array_foo array_foo;
         pg_array_elem array_elem;
         int i;
         int ret;
 
-        v  = PG_GETARG_ARRAYTYPE_P(4);
+        v  = PG_GETARG_ARRAYTYPE_P(8);
         if (!pg_process_array(v, fcinfo, &array_foo))
           PG_RETURN_BOOL(0 != 0);
         
@@ -536,49 +557,47 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
           PG_RETURN_BOOL(0 != 0);
         
       }
-      if (!PG_ARGISNULL(5)) {
-        ArrayType *v;
-        pg_array_foo array_foo;
-        pg_array_elem array_elem;
-        int ret;
-
-        v  = PG_GETARG_ARRAYTYPE_P(5);
-        if (!pg_process_array(v, fcinfo, &array_foo))
+      
+      /* generic properties */
+      if (!PG_ARGISNULL(9)) {
+	ArrayType *v;
+	pg_array_foo array_properties;
+	pg_array_elem array_elem;
+	int ret;
+	
+	v  = PG_GETARG_ARRAYTYPE_P(8);
+        if (!pg_process_array(v, fcinfo, &array_properties))
           PG_RETURN_BOOL(0 != 0);
-        
-        properties.headers.num_entries = array_foo.elems;
-        properties._flags |= AMQP_BASIC_HEADERS_FLAG;
-        properties.headers.entries = malloc(array_foo.elems * sizeof(amqp_table_entry_t));
-        if (!properties.headers.entries){
-          elog(ERROR, "out of memory");
-          PG_RETURN_BOOL(0 != 0);
-        }
-
-        while ((ret = pg_array_get_elem(&array_foo, &array_elem)))
-          if (amqp_set_property(&properties, array_elem.key, array_elem.value))
-              PG_RETURN_BOOL(0 != 0);
-        
-        if (ret == 2)
-          PG_RETURN_BOOL(0 != 0);
+	
+	while ((ret = pg_array_get_elem(&array_properties, &array_elem))){
+          if(amqp_set_property(&properties, array_elem.key, array_elem.value)){
+            elog(WARNING, "Unknow property name '%s', ignore value", array_elem.key);
+	  }
+	}
       }
       
-      rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b, mandatory, immediate, &properties, body_b);
+      //rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b, mandatory, immediate, &properties, body_b);
+      if (properties._flags == 0) {
+          rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b,
+                                  mandatory, immediate, NULL, body_b);
+      } else {
+          rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b,
+                                  mandatory, immediate, &properties, body_b);
+      }
 
       reply = amqp_get_rpc_reply();
+      safe_free(properties.headers.entries);
       if(rv || reply->reply_type != AMQP_RESPONSE_NORMAL) {
         if(once_more && (channel == 1 || bs->uncommitted == 0)) {
           once_more = 0;
           local_amqp_disconnect_bs(bs);
-          safe_free(properties.headers.entries);
           goto redo;
         }
         bs->inerror = 1;
-        safe_free(properties.headers.entries);
         PG_RETURN_BOOL(0 != 0);
       }
       /* channel two is transactional */
       if(channel == 2) bs->uncommitted++;
-      safe_free(properties.headers.entries);
       PG_RETURN_BOOL(rv == 0);
     }
   }
