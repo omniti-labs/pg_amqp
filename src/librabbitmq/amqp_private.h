@@ -125,6 +125,14 @@ extern int amqp_encode_table(amqp_bytes_t encoded,
     _result;					\
   })
 
+#define AMQP_CHECK_WRITE_RESULT(expr)			\
+  ({						\
+    int _result;            \
+    do {_result = (expr);} while (_result == -EINTR);			\
+    if (_result < 0) return _result;		\
+    _result;					\
+  })
+
 #define AMQP_CHECK_EOF_RESULT(expr)		\
   ({						\
     int _result = (expr);			\
