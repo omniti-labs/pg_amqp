@@ -51,6 +51,7 @@
 #include "utils/memutils.h"
 #include "utils/builtins.h"
 #include "librabbitmq/amqp.h"
+#include "librabbitmq/amqp_tcp_socket.h"
 #include "librabbitmq/amqp_framing.h"
 
 #define set_bytes_from_text(var,col) do { \
@@ -73,7 +74,7 @@ Datum pg_amqp_disconnect(PG_FUNCTION_ARGS);
 struct brokerstate {
   int broker_id;
   amqp_connection_state_t conn;
-  int sockfd;
+  amqp_socket_t *socket;
   int uncommitted;
   int inerror;
   int idx;
@@ -87,14 +88,13 @@ local_amqp_disconnect_bs(struct brokerstate *bs) {
   if(bs && bs->conn) {
     int errorstate = bs->inerror;
     amqp_connection_close(bs->conn, AMQP_REPLY_SUCCESS);
-    if(bs->sockfd >= 0) close(bs->sockfd);
     amqp_destroy_connection(bs->conn);
     memset(bs, 0, sizeof(*bs));
     bs->inerror = errorstate;
   }
 }
 static void amqp_local_phase2(XactEvent event, void *arg) {
-  amqp_rpc_reply_t *reply;
+  amqp_rpc_reply_t reply;
   struct brokerstate *bs;
   switch(event) {
     case XACT_EVENT_COMMIT:
@@ -102,10 +102,10 @@ static void amqp_local_phase2(XactEvent event, void *arg) {
         if(bs->inerror) local_amqp_disconnect_bs(bs);
         bs->inerror = 0;
         if(!bs->uncommitted) continue;
-        if(bs->conn) amqp_tx_commit(bs->conn, 2, AMQP_EMPTY_TABLE);
-        reply = amqp_get_rpc_reply();
-        if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-          elog(WARNING, "amqp could not commit tx mode on broker %d, reply_type=%d, library_errno=%d", bs->broker_id, reply->reply_type, reply->library_errno);
+        if(bs->conn) amqp_tx_commit(bs->conn, 2);
+        reply = amqp_get_rpc_reply(bs->conn);
+        if(reply.reply_type != AMQP_RESPONSE_NORMAL) {
+          elog(WARNING, "amqp could not commit tx mode on broker %d, reply_type=%d, library_error=%d", bs->broker_id, reply.reply_type, reply.library_error);
           local_amqp_disconnect_bs(bs);
         }
         bs->uncommitted = 0;
@@ -116,10 +116,10 @@ static void amqp_local_phase2(XactEvent event, void *arg) {
         if(bs->inerror) local_amqp_disconnect_bs(bs);
         bs->inerror = 0;
         if(!bs->uncommitted) continue;
-        if(bs->conn) amqp_tx_rollback(bs->conn, 2, AMQP_EMPTY_TABLE);
-        reply = amqp_get_rpc_reply();
-        if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
-          elog(WARNING, "amqp could not rollback tx mode on broker %d, reply_type=%d, library_errno=%d", bs->broker_id, reply->reply_type, reply->library_errno);
+        if(bs->conn) amqp_tx_rollback(bs->conn, 2);
+        reply = amqp_get_rpc_reply(bs->conn);
+        if(reply.reply_type != AMQP_RESPONSE_NORMAL) {
+          elog(WARNING, "amqp could not rollback tx mode on broker %d, reply_type=%d, library_error=%d", bs->broker_id, reply.reply_type, reply.library_error);
           local_amqp_disconnect_bs(bs);
         }
         bs->uncommitted = 0;
@@ -137,7 +137,7 @@ void _PG_init() {
 }
 
 static struct brokerstate *
-local_amqp_get_a_bs(broker_id) {
+local_amqp_get_a_bs(int broker_id) {
   struct brokerstate *bs;
   for(bs = HEAD_BS; bs; bs = bs->next) {
     if(bs->broker_id == broker_id) return bs;
@@ -149,7 +149,7 @@ local_amqp_get_a_bs(broker_id) {
   return bs;
 }
 static struct brokerstate *
-local_amqp_get_bs(broker_id) {
+local_amqp_get_bs(int broker_id) {
   char sql[1024];
   char host_copy[300] = "";
   int tries = 0;
@@ -165,11 +165,11 @@ local_amqp_get_bs(broker_id) {
    retry:
     tries--;
     if(SPI_processed > 0) {
-      struct timeval hb = { .tv_sec = 2UL, .tv_usec = 0UL };
-      amqp_rpc_reply_t *reply, s_reply;
+      amqp_rpc_reply_t reply, s_reply;
       char *host, *vhost, *user, *pass;
       Datum port_datum;
       bool is_null;
+      int status;
       int port = 5672;
       bs->idx = (bs->idx + 1) % SPI_processed;
       host = SPI_getvalue(SPI_tuptable->vals[bs->idx], SPI_tuptable->tupdesc, 1);
@@ -186,13 +186,18 @@ local_amqp_get_bs(broker_id) {
 
       bs->conn = amqp_new_connection();
       if(!bs->conn) { SPI_finish(); return NULL; }
-      bs->sockfd = amqp_open_socket(host, port, &hb);
-      if(bs->sockfd < 0) {
-        elog(WARNING, "amqp[%s] login socket/connect failed: %s",
-             host_copy, strerror(-bs->sockfd));
+      bs->socket = amqp_tcp_socket_new(bs->conn);
+      if(!bs->socket) {
+        elog(WARNING, "amqp[%s] amqp_tcp_socket_new failed", host_copy);
         goto busted;
       }
-      amqp_set_sockfd(bs->conn, bs->sockfd);
+
+      status = amqp_socket_open(bs->socket, host, port);
+      if(status != AMQP_STATUS_OK) {
+        elog(WARNING, "amqp[%s] login socket/connect failed: status=%d",
+             host_copy, status);
+        goto busted;
+      }
       s_reply = amqp_login(bs->conn, vhost, 0, 131072,
                            0, AMQP_SASL_METHOD_PLAIN,
                            user, pass);
@@ -201,20 +206,20 @@ local_amqp_get_bs(broker_id) {
         goto busted;
       }
       amqp_channel_open(bs->conn, 1);
-      reply = amqp_get_rpc_reply();
-      if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
+      reply = amqp_get_rpc_reply(bs->conn);
+      if(reply.reply_type != AMQP_RESPONSE_NORMAL) {
         elog(WARNING, "amqp[%s] channel open failed on broker %d", host_copy, broker_id);
         goto busted;
       }
       amqp_channel_open(bs->conn, 2);
-      reply = amqp_get_rpc_reply();
-      if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
+      reply = amqp_get_rpc_reply(bs->conn);
+      if(reply.reply_type != AMQP_RESPONSE_NORMAL) {
         elog(WARNING, "amqp[%s] channel open failed on broker %d", host_copy, broker_id);
         goto busted;
       }
-      amqp_tx_select(bs->conn, 2, AMQP_EMPTY_TABLE);
-      reply = amqp_get_rpc_reply();
-      if(reply->reply_type != AMQP_RESPONSE_NORMAL) {
+      amqp_tx_select(bs->conn, 2);
+      reply = amqp_get_rpc_reply(bs->conn);
+      if(reply.reply_type != AMQP_RESPONSE_NORMAL) {
         elog(WARNING, "amqp[%s] could not start tx mode on broker %d", host_copy, broker_id);
         goto busted;
       }
@@ -236,7 +241,7 @@ local_amqp_get_bs(broker_id) {
   return bs;
 }
 static void
-local_amqp_disconnect(broker_id) {
+local_amqp_disconnect(int broker_id) {
   struct brokerstate *bs = local_amqp_get_a_bs(broker_id);
   local_amqp_disconnect_bs(bs);
 }
@@ -250,12 +255,13 @@ pg_amqp_exchange_declare(PG_FUNCTION_ARGS) {
     broker_id = PG_GETARG_INT32(0);
     bs = local_amqp_get_bs(broker_id);
     if(bs && bs->conn) {
-      amqp_rpc_reply_t *reply;
+      amqp_rpc_reply_t reply;
       amqp_bytes_t exchange_b;
       amqp_bytes_t exchange_type_b;
       amqp_boolean_t passive = 0;
       amqp_boolean_t durable = 0;
       amqp_boolean_t auto_delete = 0;
+      amqp_boolean_t internal = 0;
 
       set_bytes_from_text(exchange_b,1);
       set_bytes_from_text(exchange_type_b,2);
@@ -264,9 +270,9 @@ pg_amqp_exchange_declare(PG_FUNCTION_ARGS) {
       auto_delete = PG_GETARG_BOOL(5);
       amqp_exchange_declare(bs->conn, 1,
                             exchange_b, exchange_type_b,
-                            passive, durable, auto_delete, AMQP_EMPTY_TABLE);
-      reply = amqp_get_rpc_reply();
-      if(reply->reply_type == AMQP_RESPONSE_NORMAL)
+                            passive, durable, auto_delete, internal, AMQP_EMPTY_TABLE);
+      reply = amqp_get_rpc_reply(bs->conn);
+      if(reply.reply_type == AMQP_RESPONSE_NORMAL)
         PG_RETURN_BOOL(0 == 0);
       bs->inerror = 1;
     }
@@ -286,7 +292,7 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
     bs = local_amqp_get_bs(broker_id);
     if(bs && bs->conn && (channel == 1 || !bs->inerror)) {
       int rv;
-      amqp_rpc_reply_t *reply;
+      amqp_rpc_reply_t reply;
       amqp_boolean_t mandatory = 0;
       amqp_boolean_t immediate = 0;
       amqp_bytes_t exchange_b = amqp_cstring_bytes("amq.direct");
@@ -335,8 +341,8 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
                                   mandatory, immediate, &properties, body_b);
       }
 
-      reply = amqp_get_rpc_reply();
-      if(rv || reply->reply_type != AMQP_RESPONSE_NORMAL) {
+      reply = amqp_get_rpc_reply(bs->conn);
+      if(rv || reply.reply_type != AMQP_RESPONSE_NORMAL) {
         if(once_more && (channel == 1 || bs->uncommitted == 0)) {
           once_more = 0;
           local_amqp_disconnect_bs(bs);
