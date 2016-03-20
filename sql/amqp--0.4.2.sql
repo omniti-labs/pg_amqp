@@ -89,4 +89,3 @@ delivery_mode (either 1 or 2), content_type, reply_to and correlation_id.
 
 Publish returns a boolean indicating if the publish command was successful.  Note that as
 AMQP publish is asynchronous, you may find out later it was unsuccessful.';
-

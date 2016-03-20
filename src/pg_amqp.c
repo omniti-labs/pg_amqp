@@ -475,6 +475,7 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
   if(!PG_ARGISNULL(0)) {
     int broker_id;
     amqp_basic_properties_t properties;
+    memset(&properties, 0, sizeof(properties));
     
     int once_more = 1;
     broker_id = PG_GETARG_INT32(0);
@@ -565,7 +566,7 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
 	pg_array_elem array_elem;
 	int ret;
 	
-	v  = PG_GETARG_ARRAYTYPE_P(8);
+	v  = PG_GETARG_ARRAYTYPE_P(9);
         if (!pg_process_array(v, fcinfo, &array_properties))
           PG_RETURN_BOOL(0 != 0);
 	
@@ -586,7 +587,9 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
       }
 
       reply = amqp_get_rpc_reply();
-      safe_free(properties.headers.entries);
+      if(properties.headers.entries) {
+	      safe_free(properties.headers.entries);
+      }
       if(rv || reply->reply_type != AMQP_RESPONSE_NORMAL) {
         if(once_more && (channel == 1 || bs->uncommitted == 0)) {
           once_more = 0;
