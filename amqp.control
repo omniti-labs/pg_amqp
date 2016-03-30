@@ -1,6 +1,6 @@
 # amqp extension
 comment = 'AMQP protocol support for PostgreSQL'
-default_version = '0.4.1'
+default_version = '0.5.0'
 module_pathname = '$libdir/pg_amqp'
 relocatable = false
 schema = amqp
