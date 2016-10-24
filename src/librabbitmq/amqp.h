@@ -224,7 +224,7 @@ AMQP_BEGIN_DECLS
 
 #define AMQP_VERSION_MAJOR 0
 #define AMQP_VERSION_MINOR 8
-#define AMQP_VERSION_PATCH 0
+#define AMQP_VERSION_PATCH 1
 #define AMQP_VERSION_IS_RELEASE 0
 
 
@@ -1764,10 +1764,14 @@ AMQP_CALL amqp_get_rpc_reply(amqp_connection_state_t state);
  *              v0.4.0 they are only serviced during amqp_basic_publish() and
  *              amqp_simple_wait_frame()/amqp_simple_wait_frame_noblock()
  * \param [in] sasl_method the SASL method to authenticate with the broker.
- *              followed by the authentication information.
- *              For AMQP_SASL_METHOD_PLAIN, the AMQP_SASL_METHOD_PLAIN
- *              should be followed by two arguments in this order:
- *              const char* username, and const char* password.
+ *              followed by the authentication information. The following SASL
+ *              methods are implemented:
+ *              -  AMQP_SASL_METHOD_PLAIN, the AMQP_SASL_METHOD_PLAIN argument
+ *                 should be followed by two arguments in this order:
+ *                 const char* username, and const char* password.
+ *              -  AMQP_SASL_METHOD_EXTERNAL, the AMQP_SASL_METHOD_EXTERNAL
+ *                 argument should be followed one argument:
+ *                 const char* identity.
  * \return amqp_rpc_reply_t indicating success or failure.
  *  - r.reply_type == AMQP_RESPONSE_NORMAL. Login completed successfully
  *  - r.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION. In most cases errors
@@ -1824,10 +1828,14 @@ AMQP_CALL amqp_login(amqp_connection_state_t state, char const *vhost,
  *             and amqp_simple_wait_frame()/amqp_simple_wait_frame_noblock()
  * \param [in] properties a table of properties to send the broker.
  * \param [in] sasl_method the SASL method to authenticate with the broker
- *             followed by the authentication information.
- *             For AMQP_SASL_METHOD_PLAN, the AMQP_SASL_METHOD_PLAIN parameter
- *             should be followed by two arguments in this order:
- *             const char* username, and const char* password.
+ *             followed by the authentication information. The following SASL
+ *             methods are implemented:
+ *             -  AMQP_SASL_METHOD_PLAIN, the AMQP_SASL_METHOD_PLAIN argument
+ *                should be followed by two arguments in this order:
+ *                const char* username, and const char* password.
+ *             -  AMQP_SASL_METHOD_EXTERNAL, the AMQP_SASL_METHOD_EXTERNAL
+ *                argument should be followed one argument:
+ *                const char* identity.
  * \return amqp_rpc_reply_t indicating success or failure.
  *  - r.reply_type == AMQP_RESPONSE_NORMAL. Login completed successfully
  *  - r.reply_type == AMQP_RESPONSE_LIBRARY_EXCEPTION. In most cases errors
