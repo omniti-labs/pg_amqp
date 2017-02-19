@@ -420,7 +420,7 @@ int pg_process_array(ArrayType* v, FunctionCallInfoData* fcinfo, pg_array_foo* a
   
   fmgr_info_cxt(typiofunc, &array_foo->proc, fcinfo->flinfo->fn_mcxt);
   array_foo->elems = dims[0];
-  array_foo->iter = array_create_iterator(v, 0);
+  array_foo->iter = array_create_iterator(v, 0, NULL);
   return 0;
 }
 
@@ -433,7 +433,7 @@ int pg_array_get_elem(pg_array_foo* array_foo, pg_array_elem* elem){
       elog(ERROR, "array seriously fucked");
       return 2;
     }
-    elem->key = DatumGetCString(FunctionCall3(&array_foo->proc, value, ObjectIdGetDatum(array_foo->typelem), Int32GetDatum(-1)));
+    elem->value = DatumGetCString(FunctionCall3(&array_foo->proc, value, ObjectIdGetDatum(array_foo->typelem), Int32GetDatum(-1)));
   } else {
     elem->key = NULL;
     elem->value = NULL;
@@ -528,53 +528,59 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
       /* headers */
       if (!PG_ARGISNULL(8)) {
         ArrayType *v;
-        pg_array_foo array_foo;
-        pg_array_elem array_elem;
+        pg_array_foo array_headers;
+        pg_array_elem header;
         int i;
         int ret;
 
         v  = PG_GETARG_ARRAYTYPE_P(8);
-        if (!pg_process_array(v, fcinfo, &array_foo))
+        if (pg_process_array(v, fcinfo, &array_headers)){
+            elog(WARNING, "PG_RETURN_BOOL");
           PG_RETURN_BOOL(0 != 0);
-        
-        properties.headers.num_entries = array_foo.elems;
+        }
+
+        properties.headers.num_entries = array_headers.elems;
         properties._flags |= AMQP_BASIC_HEADERS_FLAG;
-        properties.headers.entries = malloc(array_foo.elems * sizeof(amqp_table_entry_t));
+        properties.headers.entries = malloc(array_headers.elems * sizeof(amqp_table_entry_t));
         if (!properties.headers.entries){
           elog(ERROR, "out of memory");
           PG_RETURN_BOOL(0 != 0);
         }
 
         i = 0;
-        while ((ret = pg_array_get_elem(&array_foo, &array_elem))){
-          properties.headers.entries[i].key.len = strlen(array_elem.key);
-          properties.headers.entries[i].key.bytes = array_elem.key;
+        while (!(ret = pg_array_get_elem(&array_headers, &header))){
+          properties.headers.entries[i].key = amqp_cstring_bytes(header.key);
           properties.headers.entries[i].kind = 'S';
-          properties.headers.entries[i].value.bytes.len = strlen(array_elem.value);
-          properties.headers.entries[i].value.bytes.bytes = array_elem.value;
+          properties.headers.entries[i].value.bytes = amqp_cstring_bytes(header.value);
           i++;
         }
+
+        array_free_iterator(array_headers.iter);
         if (ret == 2)
           PG_RETURN_BOOL(0 != 0);
+
         
       }
       
       /* generic properties */
       if (!PG_ARGISNULL(9)) {
-	ArrayType *v;
-	pg_array_foo array_properties;
-	pg_array_elem array_elem;
-	int ret;
+        ArrayType *v;
+        pg_array_foo array_properties;
+        pg_array_elem array_elem;
+        int ret;
 	
-	v  = PG_GETARG_ARRAYTYPE_P(9);
-        if (!pg_process_array(v, fcinfo, &array_properties))
+        v  = PG_GETARG_ARRAYTYPE_P(9);
+        if (pg_process_array(v, fcinfo, &array_properties))
           PG_RETURN_BOOL(0 != 0);
 	
-	while ((ret = pg_array_get_elem(&array_properties, &array_elem))){
-          if(amqp_set_property(&properties, array_elem.key, array_elem.value)){
-            elog(WARNING, "Unknow property name '%s', ignore value", array_elem.key);
-	  }
-	}
+        while (!(ret = pg_array_get_elem(&array_properties, &array_elem))){
+            if(amqp_set_property(&properties, array_elem.key, array_elem.value)){
+                elog(WARNING, "Unknow property name '%s', ignore value", array_elem.key);
+            }
+        }
+        array_free_iterator(array_properties.iter);
+        if (ret == 2)
+          PG_RETURN_BOOL(0 != 0);
       }
       
       //rv = amqp_basic_publish(bs->conn, channel, exchange_b, routing_key_b, mandatory, immediate, &properties, body_b);
