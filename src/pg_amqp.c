@@ -535,7 +535,6 @@ pg_amqp_publish_opt(PG_FUNCTION_ARGS, int channel) {
 
         v  = PG_GETARG_ARRAYTYPE_P(8);
         if (pg_process_array(v, fcinfo, &array_headers)){
-            elog(WARNING, "PG_RETURN_BOOL");
           PG_RETURN_BOOL(0 != 0);
         }
 
