@@ -420,7 +420,7 @@ int pg_process_array(ArrayType* v, FunctionCallInfoData* fcinfo, pg_array_foo* a
   
   fmgr_info_cxt(typiofunc, &array_foo->proc, fcinfo->flinfo->fn_mcxt);
   array_foo->elems = dims[0];
-  array_foo->iter = array_create_iterator(v, 0,);
+  array_foo->iter = array_create_iterator(v, 0);
   return 0;
 }
 
