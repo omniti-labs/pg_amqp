@@ -18,7 +18,7 @@ OBJS         = src/pg_amqp.o \
 
 all: sql/$(EXTENSION)--$(EXTVERSION).sql
 
-sql/$(EXTENSION)--$(EXTVERSION).sql: sql/tables/*.sql sql/functions/*.sql
+sql/$(EXTENSION)--$(EXTVERSION).sql: sql/views/*.sql sql/functions/*.sql
 	cat $^ > $@
 
 DATA = $(wildcard updates/*--*.sql) sql/$(EXTENSION)--$(EXTVERSION).sql
