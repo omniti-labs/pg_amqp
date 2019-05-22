@@ -12,7 +12,7 @@ A process starts and connects to PostgreSQL and runs:
 			'application/json', 'some_reply_to', 'correlation_id');
 
 The last four parameters are optional and define the message properties. The parameters
-are: delivery_mode (either 1 or 2, persistent, non-persistent respectively), content_type,
+are: delivery_mode (either 1 or 2, non-persistent, persistent respectively), content_type,
 reply_to and correlation_id.
 
 Given that message parameters are optional, the function can be called without any of those in
