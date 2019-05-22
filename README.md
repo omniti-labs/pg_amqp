@@ -77,6 +77,38 @@ To update to the latest version, run the following command after running "make i
 
     ALTER EXTENSION amqp UPDATE;
 
+Setup
+-----
+
+Once you are all set, you can enter your credentials to `postgresql.conf`
+
+This file is under you local postgres installation, e.g. ubuntu PostgreSQL 9.6
+location may be: `/etc/postgresql/9.6/main/postgresql.conf`
+
+format of the data is as follows:
+
+```
+amqp.broker = '[{ "broker_id": 1, "host": "px8.uol.cz", "port": "5670",
+"vhost": "", "username": "expert", "password": "expert" }]'
+```
+
+This way you can enter how many configurations you want dividing your broker
+configuration with comma like this:
+
+```
+amqp.broker = '[{ "broker_id": 1, "host": "host.cz", "port": "5672",
+"vhost": "/", "username": "username", "password": "password" },
+{ "broker_id": 2, "host": "host.cz", "port": "5672",
+"vhost": "/", "username": "username", "password": "password" }]'
+```
+
+After changes in postgresql.conf you have to restart postgresql service, on
+ubunutu look like this:
+
+```
+service postgresql restart
+```
+
 Basic Usage
 -----------
 
