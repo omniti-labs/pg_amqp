@@ -20,8 +20,7 @@
 
 #include <assert.h>
 
-int amqp_open_socket(char const *hostname,
-		     int portnumber, struct timeval *timeout)
+int amqp_open_socket(char const *hostname, int portnumber, struct timeval *timeout)
 {
   int result = -1;
   int sockfd;
@@ -97,7 +96,7 @@ static char *header() {
 }
 
 int amqp_send_header(amqp_connection_state_t state) {
-  return write(state->sockfd, header(), 8);
+  return state->write(state, header(), 8);
 }
 
 int amqp_send_header_to(amqp_connection_state_t state,
@@ -176,9 +175,7 @@ static int wait_frame_inner(amqp_connection_state_t state,
       assert(result != 0);
     }	
 
-    result = read(state->sockfd,
-		  state->sock_inbound_buffer.bytes,
-		  state->sock_inbound_buffer.len);
+    result = state->read(state, state->sock_inbound_buffer.bytes, state->sock_inbound_buffer.len);
     if (result < 0) {
       return -errno;
     }

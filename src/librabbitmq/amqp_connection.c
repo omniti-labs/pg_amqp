@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
+#include <signal.h>
 
 #include <unistd.h>
 #include <sys/uio.h>
@@ -12,6 +13,7 @@
 #include "amqp_private.h"
 
 #include <assert.h>
+
 
 #define INITIAL_FRAME_POOL_PAGE_SIZE 65536
 #define INITIAL_DECODING_POOL_PAGE_SIZE 131072
@@ -27,13 +29,279 @@
 		_check_state->state);					\
   }
 
+BIO *bio_err = NULL;
+
+
+static int ssl_password_cb(char *buf, int num, int rwflag, void *data) {
+  if (num < strlen((char *) data) + 1){
+    return 0;
+  }
+  return (strlen(strcpy(buf, (char *) data)));
+}
+
+static amqp_rpc_reply_t _amqp_connection_close(amqp_connection_state_t state, int code)
+{
+  amqp_rpc_reply_t result;
+  char codestr[13];
+  snprintf(codestr, sizeof(codestr), "%d", code);
+  
+  /* close socket */
+  if(state->sockfd >= 0){
+    result = AMQP_SIMPLE_RPC(state, 0, CONNECTION, CLOSE, CLOSE_OK, amqp_connection_close_t, code, amqp_cstring_bytes(codestr), 0, 0);
+    close(state->sockfd);
+    state->sockfd = -1;
+  }
+  fprintf(stderr, "_amqp_connection_closed");
+  return result;
+}
+
+static amqp_rpc_reply_t _amqp_ssl_connection_close(amqp_connection_state_t state, int code)
+{
+  
+  amqp_rpc_reply_t result = _amqp_connection_close(state, code);
+  
+  if(state->ssl){
+    SSL_shutdown(state->ssl);
+    SSL_free(state->ssl);
+    state->ssl = NULL;
+  }
+ 
+  return result;
+}
+
+int amqp_connect(amqp_connection_state_t state, char const *hostname, int portnumber, struct timeval *timeout){
+  return state->connect(state, hostname, portnumber, timeout);
+}
+
+/**
+ * crate native connection
+ * \remark also used by ssl implementation
+ * \return 1 if successful done, otherwise 0
+ */
+static int _amqp_connect(amqp_connection_state_t state, const char *host, int port, struct timeval *timeout) {
+  int	sockfd	= -1;
+
+  sockfd = amqp_open_socket(host, port, timeout);
+  amqp_set_sockfd(state, sockfd);
+  
+  return (sockfd >= 0) ? 1 : 0;
+}
+
+/**
+ * initialize ssl connection and verify certificate using ssl_flags
+ * \return 1 if successful done, otherwise 0
+ */
+static int _amqp_ssl_connect(amqp_connection_state_t state, const char *host, int port, struct timeval *timeout) {
+  int	success		= -1;
+  int	rv 		= 0;
+  int	verified	= -1;
+  char	cert_cn[256]	= "\0";
+  char	error[256]	= "\0";
+  X509	*peerCert	= NULL;
+  
+  /* create socket */
+  success = _amqp_connect(state, host, port, timeout);
+  if(!success)
+    return 0;
+ 
+  
+  state->ssl = SSL_new(state->ctx);
+  state->bio = BIO_new_socket(state->sockfd, BIO_NOCLOSE);
+  SSL_set_bio(state->ssl, state->bio, state->bio);
+
+  
+
+
+  do{
+    
+    /* do connect */
+    if ((rv = SSL_connect(state->ssl)) <= 0) {
+      sprintf(error, "Error during setup SSL context, rv=%d", rv);
+      break;
+    }
+    
+    /* verify the server certificate */
+    if ( (state->ssl_flags & AMQP_SSL_FLAG_VERIFY) && (verified = SSL_get_verify_result(state->ssl)) != X509_V_OK) {
+	sprintf(error, "SSL certificate presented by peer cannot be verified: %d\n",verified);
+	break;
+    }
+    
+    /* verify common name */
+    if ( state->ssl_flags & AMQP_SSL_FLAG_CHECK_CN ) {
+
+      /* get peer certificate */
+      if (!(peerCert = SSL_get_peer_certificate(state->ssl))) {
+	sprintf(error, "No SSL certificate was presented by peer");
+	break;
+      }
+
+	X509_NAME_get_text_by_NID(X509_get_subject_name(peerCert), NID_commonName, cert_cn, sizeof(cert_cn));
+	X509_free(peerCert);
+
+	//TODO add wildcard support
+	if (strcasecmp(cert_cn, host)) {
+	  sprintf(error, "common name '%s' doesn't match host name '%s'", cert_cn, host);
+	  break;
+	}
+      }
+  }while(0);
+  
+  /* if an error occured, close connection */
+  if(strlen(error)>0){
+    fprintf(stderr, "%s\n", error);
+    _amqp_ssl_connection_close(state, AMQP_REPLY_SUCCESS);
+    return 0;
+  }
+  
+  return 1;
+}
+  
+static void _amqp_destroy_connection(amqp_connection_state_t state){
+  empty_amqp_pool(&state->frame_pool);
+  empty_amqp_pool(&state->decoding_pool);
+  free(state->outbound_buffer.bytes);
+  free(state->sock_inbound_buffer.bytes);
+}
+
+/**
+ * destroy ssl connection and free ssl context
+ */
+static void _amqp_destroy_ssl_connection(amqp_connection_state_t state){
+  _amqp_destroy_connection(state);
+  
+  if(state->ssl_key_password)
+    free(state->ssl_key_password);
+  
+  /* destroy ssl context */
+  if(state->ctx){
+    SSL_CTX_free(state->ctx);
+    state->ctx = NULL;
+  }
+}
+
+amqp_connection_state_t amqp_new_ssl_connection(const char *certificate, const char *key, const char *password, const char *ca, unsigned short flags) {
+  amqp_connection_state_t state;
+  X509 *cert = NULL, *cacert = NULL;
+  RSA *rsa = NULL;
+  BIO *cbio, *kbio;
+  X509_STORE *store = NULL;
+  char error[254] = "\0";
+  
+  
+  /** initialize connection_state */
+  state = amqp_new_connection();
+  if(!state){
+    return NULL;
+  }
+  
+  /* reset callbacks to ssl */
+  state->connect = _amqp_ssl_connect;
+  state->write = amqp_ssl_write;
+  state->read = amqp_ssl_read;
+  state->close_connection = _amqp_ssl_connection_close;
+  state->destroy_connection = _amqp_destroy_ssl_connection;
+  
+  /* save flags for ssl */
+  state->ssl_flags = flags;
+  
+  /**S initialize ssl */
+  if(!bio_err){
+      SSL_library_init();
+      OpenSSL_add_all_algorithms(); 
+//       SSL_load_error_strings();
+      
+      /* An error write context */
+      bio_err = BIO_new_fp(stderr, BIO_NOCLOSE);
+  }
+
+  
+  do{
+    if (! (state->ctx = SSL_CTX_new(SSLv23_method()))) {
+      sprintf(error, "Error during setup SSL context");
+      break;
+    }
+
+    /* read certificate */
+    if(!SSL_CTX_use_certificate_chain_file(state->ctx, certificate)){
+      cbio = BIO_new_mem_buf((void*)certificate, -1);
+      PEM_read_bio_X509(cbio, &cert, 0, NULL);
+      BIO_free(cbio);
+
+      if (!SSL_CTX_use_certificate(state->ctx, cert)) {
+	sprintf(error, "Can't read certificate file");
+	X509_free(cert);
+	break;
+      }
+      X509_free(cert);
+    }
+
+
+    if (password != NULL) {
+      state->ssl_key_password = strdup(password);
+      SSL_CTX_set_default_passwd_cb_userdata(state->ctx, (void *) state->ssl_key_password);
+      SSL_CTX_set_default_passwd_cb(state->ctx, ssl_password_cb);
+    }
+    
+    /* try to read as file */
+    if (!SSL_CTX_use_PrivateKey_file(state->ctx, key, SSL_FILETYPE_PEM)) {
+      
+      /* try reading from memory */
+      kbio = BIO_new_mem_buf((void*)key, -1);
+      PEM_read_bio_RSAPrivateKey(kbio, &rsa, (password) ? ssl_password_cb : NULL, state->ssl_key_password);
+      BIO_free(kbio);
+      if (!SSL_CTX_use_RSAPrivateKey(state->ctx, rsa)) {
+	sprintf(error, "Can't read key file");
+	RSA_free(rsa);
+	break;
+      }
+      RSA_free(rsa);
+
+    }
+    
+    /* load ca certificate */
+    if(ca){
+      if (!SSL_CTX_load_verify_locations(state->ctx, ca, 0)) {
+	/* ca is not a ca file, try reading mem buffer */
+	cbio = BIO_new_mem_buf((void*)ca, -1);
+	PEM_read_bio_X509(cbio, &cacert, 0, NULL);
+	BIO_free(cbio);
+	store = SSL_CTX_get_cert_store(state->ctx);
+	if(!X509_STORE_add_cert(store, cacert)){
+	  fprintf(stderr, "Can't add ca file to ca store\n");
+	}
+	X509_free(cacert);
+      }
+    }
+    
+    /* everything was fine, return state */
+    return state;
+  }while(0);
+  
+  /* because we reached this point, an error muss be occured */
+  empty_amqp_pool(&state->frame_pool);
+  empty_amqp_pool(&state->decoding_pool);
+  free(state);
+  fprintf(stderr, "%s\n", error);
+  return NULL;
+  
+}
+  
+/**
+ * initialize amqp connection_state
+ */
 amqp_connection_state_t amqp_new_connection(void) {
-  amqp_connection_state_t state =
-    (amqp_connection_state_t) calloc(1, sizeof(struct amqp_connection_state_t_));
+  amqp_connection_state_t state = (amqp_connection_state_t) calloc(1, sizeof(struct amqp_connection_state_t_));
 
   if (state == NULL) {
     return NULL;
   }
+  
+  /* initialize with default connect method */
+  state->connect = _amqp_connect;
+  state->write = amqp_write;
+  state->read = amqp_read;
+  state->close_connection = _amqp_connection_close;
+  state->destroy_connection = _amqp_destroy_connection;
 
   init_amqp_pool(&state->frame_pool, INITIAL_FRAME_POOL_PAGE_SIZE);
   init_amqp_pool(&state->decoding_pool, INITIAL_DECODING_POOL_PAGE_SIZE);
@@ -69,13 +337,13 @@ amqp_connection_state_t amqp_new_connection(void) {
   return state;
 }
 
+
+
 int amqp_get_sockfd(amqp_connection_state_t state) {
   return state->sockfd;
 }
 
-void amqp_set_sockfd(amqp_connection_state_t state,
-		     int sockfd)
-{
+void amqp_set_sockfd(amqp_connection_state_t state, int sockfd) {
   state->sockfd = sockfd;
 }
 
@@ -112,10 +380,7 @@ int amqp_get_channel_max(amqp_connection_state_t state) {
 }
 
 void amqp_destroy_connection(amqp_connection_state_t state) {
-  empty_amqp_pool(&state->frame_pool);
-  empty_amqp_pool(&state->decoding_pool);
-  free(state->outbound_buffer.bytes);
-  free(state->sock_inbound_buffer.bytes);
+  state->destroy_connection(state);
   free(state);
 }
 
@@ -126,8 +391,7 @@ static void return_to_idle(amqp_connection_state_t state) {
   state->state = CONNECTION_STATE_IDLE;
 }
 
-void amqp_set_basic_return_cb(amqp_connection_state_t state,
-                              amqp_basic_return_fn_t f, void *data) {
+void amqp_set_basic_return_cb(amqp_connection_state_t state, amqp_basic_return_fn_t f, void *data) {
   state->basic_return_callback = f;
   state->basic_return_callback_data = data;
 }
@@ -238,8 +502,7 @@ int amqp_handle_input(amqp_connection_state_t state,
 
 	  decoded_frame->frame_type = AMQP_FRAME_BODY;
 	  decoded_frame->payload.body_fragment.len = fragment_len;
-	  decoded_frame->payload.body_fragment.bytes =
-	    D_BYTES(state->inbound_buffer, HEADER_SIZE, fragment_len);
+	  decoded_frame->payload.body_fragment.bytes = D_BYTES(state->inbound_buffer, HEADER_SIZE, fragment_len);
 	  break;
 	}
 
@@ -256,10 +519,10 @@ int amqp_handle_input(amqp_connection_state_t state,
 
       if(decoded_frame->frame_type == AMQP_FRAME_METHOD &&
          decoded_frame->payload.method.id == AMQP_BASIC_RETURN_METHOD) {
+	  
         amqp_basic_return_t *m = decoded_frame->payload.method.decoded;
         if(state->basic_return_callback)
-          state->basic_return_callback(decoded_frame->channel, m,
-                                       state->basic_return_callback_data);
+          state->basic_return_callback(decoded_frame->channel, m, state->basic_return_callback_data);
       }
 
       return total_bytes_consumed;
@@ -268,8 +531,7 @@ int amqp_handle_input(amqp_connection_state_t state,
     case CONNECTION_STATE_WAITING_FOR_PROTOCOL_HEADER:
       decoded_frame->frame_type = AMQP_PSEUDOFRAME_PROTOCOL_HEADER;
       decoded_frame->channel = AMQP_PSEUDOFRAME_PROTOCOL_CHANNEL;
-      amqp_assert(D_8(state->inbound_buffer, 3) == (uint8_t) 'P',
-		  "Invalid protocol header received");
+      amqp_assert(D_8(state->inbound_buffer, 3) == (uint8_t) 'P', "Invalid protocol header received");
       decoded_frame->payload.protocol_header.transport_high = D_8(state->inbound_buffer, 4);
       decoded_frame->payload.protocol_header.transport_low = D_8(state->inbound_buffer, 5);
       decoded_frame->payload.protocol_header.protocol_version_major = D_8(state->inbound_buffer, 6);
@@ -381,18 +643,16 @@ int amqp_send_frame(amqp_connection_state_t state,
   separate_body = inner_send_frame(state, frame, &encoded, &payload_len);
   switch (separate_body) {
     case 0:
-      AMQP_CHECK_RESULT(write(state->sockfd,
-			      state->outbound_buffer.bytes,
-			      payload_len + (HEADER_SIZE + FOOTER_SIZE)));
+      AMQP_CHECK_RESULT(state->write(state, state->outbound_buffer.bytes, payload_len + (HEADER_SIZE + FOOTER_SIZE)));
       return 0;
 
     case 1:
-      AMQP_CHECK_RESULT(write(state->sockfd, state->outbound_buffer.bytes, HEADER_SIZE));
-      AMQP_CHECK_RESULT(write(state->sockfd, encoded.bytes, payload_len));
+      AMQP_CHECK_RESULT(state->write(state, state->outbound_buffer.bytes, HEADER_SIZE));
+      AMQP_CHECK_RESULT(state->write(state, encoded.bytes, payload_len));
       {
 	unsigned char frame_end_byte = AMQP_FRAME_END;
 	assert(FOOTER_SIZE == 1);
-	AMQP_CHECK_RESULT(write(state->sockfd, &frame_end_byte, FOOTER_SIZE));
+	AMQP_CHECK_RESULT(state->write(state, &frame_end_byte, FOOTER_SIZE));
       }
       return 0;
 
@@ -432,3 +692,69 @@ int amqp_send_frame_to(amqp_connection_state_t state,
       return separate_body;
   }
 }
+
+int amqp_write(amqp_connection_state_t state, void *buffer, size_t size) {
+  return write(state->sockfd, buffer, size);
+}
+int amqp_ssl_write(amqp_connection_state_t state, void *buffer, size_t size) {
+  int	err;
+  int	len;
+
+  len = SSL_write(state->ssl, buffer, size);
+
+  if (! len) {
+    switch ((err = SSL_get_error(state->ssl, len))) {
+      case SSL_ERROR_SYSCALL:
+        if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) {
+          case SSL_ERROR_WANT_WRITE:
+          case SSL_ERROR_WANT_READ:
+            errno = EWOULDBLOCK;
+            return (0);
+        }
+
+      case SSL_ERROR_SSL:
+        if (errno == EAGAIN) {
+          return 0;
+        }
+
+      default:
+        return 0;
+    }
+  }
+
+
+  return len;
+}
+int amqp_read(amqp_connection_state_t state, void *buffer, size_t size) {
+  return read(state->sockfd, buffer, size);
+}
+
+int amqp_ssl_read(amqp_connection_state_t state, void *buffer, size_t size) {
+  int	err;
+  int	len;
+
+  len = SSL_read(state->ssl, buffer, size);
+
+  if (!len) {
+    switch ((err = SSL_get_error(state->ssl, len))) {
+      case SSL_ERROR_SYSCALL:
+        if ((errno == EWOULDBLOCK) || (errno == EAGAIN) || (errno == EINTR)) {
+          case SSL_ERROR_WANT_READ:
+            errno = EWOULDBLOCK;
+            return 0;
+        }
+
+      case SSL_ERROR_SSL:
+        if (errno == EAGAIN) {
+          return 0;
+        }
+
+      default:
+        return 0;
+    }
+  }
+
+
+  return len;
+}
+// kate: indent-width 2; replace-tabs off; indent-mode cstyle; auto-insert-doxygen on; line-numbers on; tab-indents on; keep-extra-spaces off; auto-brackets on;

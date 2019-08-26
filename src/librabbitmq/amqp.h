@@ -98,6 +98,11 @@ typedef enum amqp_response_type_enum_ {
   AMQP_RESPONSE_SERVER_EXCEPTION
 } amqp_response_type_enum;
 
+typedef enum amqp_ssl_flags_type_enum_ {
+  AMQP_SSL_FLAG_VERIFY		= 1 << 0,
+  AMQP_SSL_FLAG_CHECK_CN	= 1 << 2,
+} amqp_ssl_flags_type_enum;
+
 typedef struct amqp_rpc_reply_t_ {
   amqp_response_type_enum reply_type;
   amqp_method_t reply;
@@ -113,8 +118,7 @@ typedef enum amqp_sasl_method_enum_ {
 
 typedef struct amqp_basic_return_t_ amqp_basic_return_t;
 typedef int (*amqp_output_fn_t)(void *context, void *buffer, size_t count);
-typedef void (*amqp_basic_return_fn_t)(amqp_channel_t, amqp_basic_return_t *,
-                                       void *);
+typedef void (*amqp_basic_return_fn_t)(amqp_channel_t, amqp_basic_return_t *, void *);
 
 
 /* Opaque struct. */
@@ -140,6 +144,7 @@ extern amqp_bytes_t amqp_bytes_malloc_dup(amqp_bytes_t src);
     }						\
   })
 
+extern amqp_connection_state_t amqp_new_ssl_connection(const char *certificate, const char *key, const char *password, const char *ca, unsigned short flags);
 extern amqp_connection_state_t amqp_new_connection(void);
 extern int amqp_get_sockfd(amqp_connection_state_t state);
 extern void amqp_set_sockfd(amqp_connection_state_t state,
@@ -173,8 +178,7 @@ extern int amqp_send_frame_to(amqp_connection_state_t state,
 
 extern int amqp_table_entry_cmp(void const *entry1, void const *entry2);
 
-extern int amqp_open_socket(char const *hostname, int portnumber,
-                            struct timeval *timeout);
+extern int amqp_connect(amqp_connection_state_t state, char const *hostname, int portnumber, struct timeval *timeout);
 
 extern int amqp_send_header(amqp_connection_state_t state);
 extern int amqp_send_header_to(amqp_connection_state_t state,
@@ -342,6 +346,7 @@ extern amqp_boolean_t amqp_data_in_buffer(amqp_connection_state_t state);
  * Expose amqp_rpc_reply to libraries.
  */
 extern amqp_rpc_reply_t *amqp_get_rpc_reply(void);
+
 
 #ifdef __cplusplus
 }

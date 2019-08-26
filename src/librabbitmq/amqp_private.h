@@ -6,6 +6,8 @@ extern "C" {
 #endif
 
 #include <arpa/inet.h> /* ntohl, htonl, ntohs, htons */
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 /*
  * Connection states:
@@ -48,6 +50,12 @@ typedef struct amqp_link_t_ {
   void *data;
 } amqp_link_t;
 
+typedef int (amqp_connect_fn_t)(amqp_connection_state_t state, const char *host, int port, struct timeval *timeout);
+typedef int (amqp_write_fn_t)(amqp_connection_state_t state, void *buffer, size_t nb);
+typedef int (amqp_read_fn_t)(amqp_connection_state_t state, void *buffer, size_t nb);
+typedef amqp_rpc_reply_t (amqp_close_connection_fn_t)(amqp_connection_state_t state, int code);
+typedef void (amqp_destroy_connection_fn_t)(amqp_connection_state_t state);
+
 struct amqp_connection_state_t_ {
   amqp_pool_t frame_pool;
   amqp_pool_t decoding_pool;
@@ -65,6 +73,20 @@ struct amqp_connection_state_t_ {
   amqp_bytes_t outbound_buffer;
 
   int sockfd;
+  
+  /** ssl support */
+  SSL_CTX *ctx;
+  SSL *ssl;
+  BIO *bio;
+  unsigned short ssl_flags;
+  amqp_connect_fn_t *connect;
+  amqp_write_fn_t *write;
+  amqp_read_fn_t *read;
+  char *ssl_key_password;
+  amqp_close_connection_fn_t *close_connection;
+  amqp_destroy_connection_fn_t *destroy_connection;
+  /** */
+  
   amqp_bytes_t sock_inbound_buffer;
   size_t sock_inbound_offset;
   size_t sock_inbound_limit;
@@ -74,6 +96,8 @@ struct amqp_connection_state_t_ {
 
   amqp_basic_return_fn_t basic_return_callback;
   void *basic_return_callback_data;
+  
+  
 };
 
 #define CHECK_LIMIT(b, o, l, v) ({ if ((o + l) > (b).len) { return -EFAULT; } (v); })
@@ -108,6 +132,12 @@ extern int amqp_decode_table(amqp_bytes_t encoded,
 extern int amqp_encode_table(amqp_bytes_t encoded,
 			     amqp_table_t *input,
 			     int *offsetptr);
+
+extern int amqp_open_socket(char const *hostname, int portnumber, struct timeval *timeout);
+int amqp_write(amqp_connection_state_t state, void *buffer, size_t size);
+int amqp_ssl_write(amqp_connection_state_t state, void *buffer, size_t size);
+int amqp_read(amqp_connection_state_t state, void *buffer, size_t size);
+int amqp_ssl_read(amqp_connection_state_t state, void* buffer, size_t size);
 
 #define amqp_assert(condition, ...)		\
   ({						\
