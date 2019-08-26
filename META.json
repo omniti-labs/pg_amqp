@@ -1,10 +1,10 @@
 {
    "name": "pg_amqp",
    "abstract": "AMQP protocol support for PostgreSQL",
-   "version": "0.4.2",
+   "version": "0.5.0",
    "description": "The pg_amqp package provides the ability for postgres statements to directly publish messages to an AMQP broker.",
-   "maintainer": 
-       [ "Theo Schlossnagle <jesus@omnti.com>", "Keith Fiske <keith@keithf4.com" ] 
+   "maintainer":
+       [ "Theo Schlossnagle <jesus@omnti.com>", "Keith Fiske <keith@keithf4.com" ]
    "license": [ "bsd", "mozilla_1_0" ],
    "generated_by": "Keith Fiske",
    "status": "stable",
@@ -19,7 +19,7 @@
      "amqp": {
        "file": "sql/amqp--0.4.1.sql",
         "docfile": "doc/amqp.md",
-       "version": "0.4.1",
+       "version": "0.5.0",
        "abstract": "AMQP protocol support for PostgreSQL"
      }
    },
@@ -32,7 +32,7 @@
            "web": "https://github.com/omniti-labs/pg_amqp",
            "type": "git"
        }
-   },    
+   },
 
    "meta-spec": {
       "version": "1.0.0",
