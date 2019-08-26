@@ -3,6 +3,7 @@ EXTVERSION   = $(shell grep default_version $(EXTENSION).control | \
                sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 PG_CONFIG    = pg_config
 PG91         = $(shell $(PG_CONFIG) --version | grep -qE " 8\.| 9\.0" && echo no || echo yes)
+REGRESS      = smoke_test
 
 ifeq ($(PG91),yes)
 CFLAGS_SL='-D HAVE_POLL'
