@@ -1,8 +1,8 @@
 pg_amqp
-=============
 
 The pg_amqp package provides the ability for postgres statements to directly
-publish messages to an [AMQP](http://www.amqp.org/) broker.
+publish messages to an [AMQP](http://www.amqp.org/) broker. Version 0.4.2 also provides an implementation 
+for secured connections using open ssl. To build v0.4.2 openssl dev package is required.
 
 All bug reports, feature requests and general questions can be directed to the Issues section on Github. - http://github.com/omniti-labs/pg_amqp
 
