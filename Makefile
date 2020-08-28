@@ -11,9 +11,9 @@ DOCS         = $(wildcard doc/*.*)
 #REGRESS_OPTS = --inputdir=test
 MODULE_big   = $(patsubst src/%.c,%,$(wildcard src/*.c))
 OBJS         = src/pg_amqp.o \
-	src/librabbitmq/amqp_api.o src/librabbitmq/amqp_connection.o \
+	src/librabbitmq/amqp_api.o src/librabbitmq/amqp_connection.o src/librabbitmq/amqp_debug.o \
 	src/librabbitmq/amqp_framing.o src/librabbitmq/amqp_mem.o src/librabbitmq/amqp_socket.o \
-	src/librabbitmq/amqp_table.o src/librabbitmq/amqp_time.o src/librabbitmq/amqp_tcp_socket.o
+	src/librabbitmq/amqp_table.o
 
 
 all: sql/$(EXTENSION)--$(EXTVERSION).sql
