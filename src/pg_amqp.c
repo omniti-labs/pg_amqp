@@ -137,7 +137,7 @@ void _PG_init() {
 }
 
 static struct brokerstate *
-local_amqp_get_a_bs(broker_id) {
+local_amqp_get_a_bs(int broker_id) {
   struct brokerstate *bs;
   for(bs = HEAD_BS; bs; bs = bs->next) {
     if(bs->broker_id == broker_id) return bs;
@@ -149,7 +149,7 @@ local_amqp_get_a_bs(broker_id) {
   return bs;
 }
 static struct brokerstate *
-local_amqp_get_bs(broker_id) {
+local_amqp_get_bs(int broker_id) {
   char sql[1024];
   char host_copy[300] = "";
   int tries = 0;
@@ -236,7 +236,7 @@ local_amqp_get_bs(broker_id) {
   return bs;
 }
 static void
-local_amqp_disconnect(broker_id) {
+local_amqp_disconnect(int broker_id) {
   struct brokerstate *bs = local_amqp_get_a_bs(broker_id);
   local_amqp_disconnect_bs(bs);
 }
