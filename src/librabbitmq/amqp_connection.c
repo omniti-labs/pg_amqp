@@ -43,9 +43,6 @@ amqp_connection_state_t amqp_new_connection(void) {
   state->inbound_buffer.bytes = NULL;
   state->outbound_buffer.bytes = NULL;
   if (amqp_tune_connection(state, 0, INITIAL_FRAME_POOL_PAGE_SIZE, 0) != 0) {
-    empty_amqp_pool(&state->frame_pool);
-    empty_amqp_pool(&state->decoding_pool);
-    free(state);
     return NULL;
   }
 
